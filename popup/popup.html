@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UniMemo — AI Context Bridge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+
+  <!-- ── Header ─────────────────────────────────────────── -->
+  <header class="header">
+    <div class="logo">
+      <span class="logo-icon">🔗</span>
+      <span class="logo-text">UniMemo</span>
+    </div>
+    <span class="tagline">AI Context Bridge</span>
+  </header>
+
+  <!-- ── Workflow Steps ──────────────────────────────────── -->
+  <div class="workflow-bar">
+    <div class="step" id="step1" data-active="true">
+      <span class="step-num">1</span>
+      <div class="step-info">
+        <span class="step-title">Capture</span>
+        <span class="step-sub">on source AI</span>
+      </div>
+    </div>
+    <div class="step-arrow">→</div>
+    <div class="step" id="step2">
+      <span class="step-num">2</span>
+      <div class="step-info">
+        <span class="step-title">Paste</span>
+        <span class="step-sub">in target AI</span>
+      </div>
+    </div>
+    <div class="status-pill">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">Ready</span>
+    </div>
+  </div>
+
+  <!-- ── Main Content ───────────────────────────────────── -->
+  <main class="main">
+
+    <!-- ── Empty State ──────────────────────────────────── -->
+    <div class="empty-state" id="empty-state" hidden>
+      <div class="empty-icon">💬</div>
+      <p class="empty-title">No context captured yet</p>
+      <p class="empty-sub">Open a conversation on Claude, ChatGPT, or Gemini,<br>then click <strong>Capture</strong> below.</p>
+    </div>
+
+    <!-- ── Context Card ─────────────────────────────────── -->
+    <div class="context-card" id="context-card" hidden>
+
+      <!-- Card Header -->
+      <div class="card-header">
+        <div class="platform-badge" id="platform-badge">
+          <span id="platform-emoji">🤖</span>
+          <span id="platform-name">Platform</span>
+        </div>
+        <div class="card-meta">
+          <span class="msg-count" id="msg-count">0 messages</span>
+          <span class="captured-time" id="captured-time">–</span>
+        </div>
+      </div>
+
+      <!-- Compression Stats Bar -->
+      <div class="compression-bar" id="compression-bar" hidden>
+        <div class="compression-label">
+          <span class="compress-icon">🗜</span>
+          <span>TSGC Compression</span>
+        </div>
+        <div class="compress-stats">
+          <span class="compress-badge savings" id="compress-savings">–% saved</span>
+          <span class="compress-badge zones" id="compress-zones">Z1·Z2·Z3</span>
+        </div>
+      </div>
+
+      <!-- Message Preview -->
+      <div class="preview-label">Last 3 messages</div>
+      <div class="message-preview" id="message-preview">
+        <!-- Injected by popup.js -->
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- ── Action Area ───────────────────────────────────── -->
+  <footer class="footer">
+
+    <!-- Step 1 panel -->
+    <div class="action-panel" id="panel-step1">
+      <div class="panel-label">Step 1 · On your current AI tab</div>
+      <button class="btn btn-primary btn-full" id="btn-capture">
+        <span class="btn-icon">⚡</span>
+        <span>Capture This Conversation</span>
+      </button>
+    </div>
+
+    <!-- Step 2 panel (shown after capture) -->
+    <div class="action-panel" id="panel-step2" hidden>
+      <div class="panel-label">Step 2 · Now switch to another AI &amp; paste</div>
+      <div class="btn-row">
+        <button class="btn btn-accent btn-full" id="btn-copy">
+          <span class="btn-icon">📋</span>
+          <span>Copy &amp; Switch AI</span>
+        </button>
+        <button class="btn btn-ghost btn-icon-only" id="btn-clear" title="Clear saved context">
+          <span>🗑</span>
+        </button>
+      </div>
+      <p class="panel-hint">Paste with <kbd>⌘V</kbd> in the new AI chat</p>
+    </div>
+
+  </footer>
+
+  <!-- ── Toast ──────────────────────────────────────────── -->
+  <div class="toast" id="toast" aria-live="polite"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -171,9 +171,15 @@ def extractive_compress(text, ratio):
     sents = split_sentences(text)
     if not sents or ratio >= 1.0:
         return text
+    
+    # Use round() instead of max(1, int()) to allow dropping short messages completely 
+    # when the ratio is very low, which differentiates the TSGC variants.
+    keep = round(len(sents) * ratio)
+    if keep == 0:
+        return ""
+        
     scored = [(sentence_score(s, i, len(sents)), i, s) for i, s in enumerate(sents)]
     scored.sort(reverse=True)
-    keep = max(1, int(len(sents) * ratio))
     kept = sorted(scored[:keep], key=lambda x: x[1])
     return ' '.join(s for _, _, s in kept)
 
@@ -213,7 +219,9 @@ def method_sliding_window(msgs, window=20):
 
 def method_random_truncation(msgs, keep_ratio=0.5):
     random.seed(42)
-    k = max(1, int(len(msgs) * keep_ratio))
+    k = round(len(msgs) * keep_ratio)
+    if k == 0:
+        return []
     indices = sorted(random.sample(range(len(msgs)), k))
     return [msgs[i] for i in indices]
 
@@ -234,7 +242,9 @@ def method_tfidf_selection(msgs, keep_ratio=0.5):
     vec = TfidfVectorizer(max_features=500, stop_words='english')
     tfidf = vec.fit_transform(texts)
     scores = np.array(tfidf.sum(axis=1)).flatten()
-    k = max(1, int(len(msgs) * keep_ratio))
+    k = round(len(msgs) * keep_ratio)
+    if k == 0:
+        return []
     top_indices = sorted(np.argsort(scores)[-k:])
     return [msgs[i] for i in top_indices]
 
@@ -251,7 +261,9 @@ def method_textrank(msgs, keep_ratio=0.5):
         scores = nx.pagerank(G, max_iter=100)
     except:
         scores = {i: 1.0 for i in range(len(msgs))}
-    k = max(1, int(len(msgs) * keep_ratio))
+    k = round(len(msgs) * keep_ratio)
+    if k == 0:
+        return []
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     top_indices = sorted([idx for idx, _ in ranked[:k]])
     return [msgs[i] for i in top_indices]

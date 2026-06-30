@@ -186,7 +186,7 @@ CSGC_DIAGNOSTICS = []
 
 # -- CSGC: Conversation State Graph Compression (with Validation Framework) --
 class CSGCMemory:
-    def __init__(self, target_kb=None, keep_ratio=0.5, topic_threshold=0.6, merge_threshold=0.85):
+    def __init__(self, target_kb=None, keep_ratio=0.5, topic_threshold=0.85, merge_threshold=0.95):
         self.target_kb = target_kb
         self.keep_ratio = keep_ratio
         self.topic_threshold = topic_threshold
@@ -373,7 +373,7 @@ class CSGCMemory:
                         best_node = i
                         best_cost = cost
                         
-                if best_node == -1 or current_bytes + best_cost > budget_bytes:
+                if best_node == -1 or best_marginal <= 0 or current_bytes + best_cost > budget_bytes:
                     break
                     
                 selected_nodes.append(best_node)
@@ -427,22 +427,18 @@ class CSGCMemory:
 def method_csgc(msgs, target_kb=None):
     return CSGCMemory(target_kb=target_kb).compress(msgs)
 
-def method_csgc_no_coverage(msgs, target_kb=None):
-    return CSGCMemory(target_kb=target_kb).compress(msgs, use_coverage=False)
-    
-def method_csgc_no_pagerank(msgs, target_kb=None):
-    return CSGCMemory(target_kb=target_kb).compress(msgs, use_pagerank=False)
-
 METHODS = [
-    ('RAW',              method_raw,                                          False),
-    ('Sliding Window',   lambda m: method_sliding_window(m, 20),              False),
-    ('Lead+Tail',        lambda m: method_lead_tail(m, 10),                   False),
-    ('TF-IDF',           lambda m: method_tfidf(m, 0.5),                      False),
-    ('LLM-Sim',          lambda m: method_llm_sim(m, 0.3),                    False),
-    ('CSGC (5KB)',       lambda m: method_csgc(m, target_kb=5),               True),
-    ('CSGC (10KB)',      lambda m: method_csgc(m, target_kb=10),              True),
-    ('CSGC (20KB)',      lambda m: method_csgc(m, target_kb=20),              True),
-    ('CSGC (50KB)',      lambda m: method_csgc(m, target_kb=50),              True),
+    ('RAW',               method_raw,                                            False),
+    ('TF-IDF',            lambda m: method_tfidf(m, 0.5),                        False),
+    ('CSGC (Base)',       lambda m: CSGCMemory(target_kb=20).compress(m, 'baseline'), True),
+    ('CSGC (+Topic)',     lambda m: CSGCMemory(target_kb=20).compress(m, 'topic'), True),
+    ('CSGC (+State)',     lambda m: CSGCMemory(target_kb=20).compress(m, 'state'), True),
+    ('CSGC (+Graph)',     lambda m: CSGCMemory(target_kb=20).compress(m, 'graph'), True),
+    ('CSGC (+Import)',    lambda m: CSGCMemory(target_kb=20).compress(m, 'importance'), True),
+    ('CSGC (+Cover)',     lambda m: CSGCMemory(target_kb=20).compress(m, 'coverage'), True),
+    ('CSGC (Full 10KB)',  lambda m: CSGCMemory(target_kb=10).compress(m, 'full'), True),
+    ('CSGC (Full 20KB)',  lambda m: CSGCMemory(target_kb=20).compress(m, 'full'), True),
+    ('CSGC (Full 50KB)',  lambda m: CSGCMemory(target_kb=50).compress(m, 'full'), True),
 ]
 print(f"\\u2705 {len(METHODS)} methods defined.")"""))
 
@@ -610,11 +606,11 @@ cells.append(make_code("""fig, ax = plt.subplots(figsize=(9, 6))
 COLORS = {
     'RAW':'#95a5a6','Sliding Window':'#7f8c8d','Lead+Tail':'#bdc3c7',
     'TF-IDF':'#e67e22','LLM-Sim':'#c0392b',
-    'CSGC (5KB)':'#2980b9','CSGC (10KB)':'#8e44ad',
-    'CSGC (20KB)':'#27ae60','CSGC (50KB)':'#1abc9c'
+    'CSGC (Full 10KB)':'#8e44ad',
+    'CSGC (Full 20KB)':'#27ae60','CSGC (Full 50KB)':'#1abc9c'
 }
-SIZES = {'CSGC (5KB)':220,'CSGC (10KB)':260,'CSGC (20KB)':300,'CSGC (50KB)':340}
-MARKERS = {'CSGC (5KB)':'D','CSGC (10KB)':'s','CSGC (20KB)':'*','CSGC (50KB)':'P'}
+SIZES = {'CSGC (Full 10KB)':260,'CSGC (Full 20KB)':300,'CSGC (Full 50KB)':340}
+MARKERS = {'CSGC (Full 10KB)':'s','CSGC (Full 20KB)':'*','CSGC (Full 50KB)':'P'}
 
 for method in ORDER:
     row  = AGG.loc[method]

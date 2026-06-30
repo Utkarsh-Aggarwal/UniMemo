@@ -196,9 +196,9 @@ class CSGCMemory:
         self.state_weights = np.array([1.0, 1.0, 0.8, 0.5, 0.8, 0.8, 0.3]) # Priorities
         
     def extract_facts(self, text):
-        entities = set(re.findall(r'\b[A-Z][a-z]+\b', text))
-        numbers = set(re.findall(r'\b\d+\b', text))
-        code = set(re.findall(r'\b[a-z]+(?:_[a-z]+)+\b|\b[a-z]+(?:[A-Z][a-z]+)+\b', text))
+        entities = set(re.findall(r'\\b[A-Z][a-z]+\\b', text))
+        numbers = set(re.findall(r'\\b\\d+\\b', text))
+        code = set(re.findall(r'\\b[a-z]+(?:_[a-z]+)+\\b|\\b[a-z]+(?:[A-Z][a-z]+)+\\b', text))
         return list(entities | numbers | code)
         
     def compress(self, msgs, ablation_stage='full'):
@@ -286,8 +286,23 @@ class CSGCMemory:
         t_graph = time.perf_counter()
         
         # Step 5: Conversation Importance Scoring
-        if ablation_stage in ['baseline', 'topic', 'state', 'graph']:
-            base_importance = np.ones(m_nodes)
+        recency = np.array([math.exp(-1.5 * (n - 1 - max(node['msgs'])) / max(n-1, 1)) for node in state_nodes])
+        
+        if ablation_stage in ['baseline', 'topic', 'state']:
+            base_importance = recency
+        elif ablation_stage == 'graph':
+            try: pr = nx.pagerank(G, weight='weight', max_iter=200)
+            except: pr = {i: 1.0/m_nodes for i in range(m_nodes)}
+            pr_scores = np.array([pr.get(i, 0) for i in range(m_nodes)])
+            pr_norm = pr_scores / max(pr_scores.max(), 1e-9)
+            
+            in_degree = np.array([sum([data['weight'] for u,v,data in G.in_edges(i, data=True)]) for i in range(m_nodes)])
+            in_norm = in_degree / max(in_degree.max(), 1e-9)
+            
+            out_degree = np.array([sum([data['weight'] for u,v,data in G.out_edges(i, data=True) if v > i]) for i in range(m_nodes)])
+            out_norm = out_degree / max(out_degree.max(), 1e-9)
+            
+            base_importance = 0.40 * pr_norm + 0.30 * in_norm + 0.20 * out_norm + 0.10 * recency
         else:
             try: pr = nx.pagerank(G, weight='weight', max_iter=200)
             except: pr = {i: 1.0/m_nodes for i in range(m_nodes)}
@@ -300,7 +315,6 @@ class CSGCMemory:
             out_degree = np.array([sum([data['weight'] for u,v,data in G.out_edges(i, data=True) if v > i]) for i in range(m_nodes)])
             out_norm = out_degree / max(out_degree.max(), 1e-9)
             
-            recency = np.array([math.exp(-1.5 * (n - 1 - max(node['msgs'])) / max(n-1, 1)) for node in state_nodes])
             node_state_scores = np.array([state_scores[node['rep']] for node in state_nodes])
             node_state_norm = node_state_scores / max(node_state_scores.max(), 1e-9)
             
@@ -347,11 +361,12 @@ class CSGCMemory:
                     
                     if ablation_stage not in ['coverage', 'serialization', 'full']:
                         marginal = base_importance[i]
+                        gain_per_byte = marginal
                     else:
                         new_f = get_submodular_score(selected_nodes + [i])
                         marginal = new_f - current_f
+                        gain_per_byte = marginal / max(cost, 1)
                         
-                    gain_per_byte = marginal / max(cost, 1)
                     if gain_per_byte > best_gain_per_byte:
                         best_gain_per_byte = gain_per_byte
                         best_marginal = marginal

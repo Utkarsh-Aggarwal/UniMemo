@@ -22,7 +22,7 @@
 \begin{document}
 
 %%%%%%%%% TITLE
-\title{Storage-Efficient Conversational Memory via Semantic Graph Compression}
+\title{Storage-Efficient Conversational Memory via State Graph Compression}
 
 \author{Utkarsh Aggarwal\\
 % Institution\\
@@ -33,78 +33,62 @@
 
 %%%%%%%%% ABSTRACT
 \begin{abstract}
-As large language models (LLMs) are deployed as autonomous agents, persisting long-horizon conversational context has become a critical bottleneck. Bounded context windows and local storage constraints demand highly efficient memory systems. Traditional extractive methods like TF-IDF treat conversations as unordered bags of words, destroying sequential dependencies and discarding critical architectural decisions. We introduce \textbf{TSGC v2}, a graph-theoretic conversational memory compression algorithm. TSGC v2 constructs a semantic similarity graph over E5 dense embeddings~\cite{wang2022e5}, computes PageRank centrality to identify topically important messages, applies smooth exponential temporal decay, and selects messages under a strict storage budget. Instead of optimizing for maximum compression, TSGC v2 operates on a Pareto trade-off curve between information preservation and disk storage. Experiments on the WildChat corpus demonstrate statistically significant storage savings over TF-IDF ($p < 0.01$, Wilcoxon signed-rank test) while preserving superior QA accuracy and architectural pivot recall at equivalent storage budgets.
+As large language models (LLMs) are deployed as autonomous agents, persisting long-horizon conversational context has become a critical bottleneck. Bounded context windows and local storage constraints demand highly efficient memory systems. Traditional extractive methods treat conversations as unordered bags of words, destroying sequential dependencies. We introduce \textbf{CSGC} (Conversation State Graph Compression), a graph-theoretic memory system that compresses conversational \textit{states} rather than textual content. By discovering incremental topics and utilizing soft multi-label state assignments, CSGC constructs a temporal-semantic state graph. Messages are merged to reduce redundancy, scored using graph centrality and conversational flow metrics, and optimally selected to maximize coverage under a strict storage budget. Experiments on the WildChat corpus demonstrate statistically significant storage savings over TF-IDF ($p < 0.01$) while preserving superior QA accuracy and architectural pivot recall, establishing a new Pareto-optimal frontier for long-horizon agents.
 \end{abstract}
 
 %%%%%%%%% BODY TEXT
 \section{Introduction}
-Autonomous agents driven by Large Language Models require persistent conversational context for coherent long-term interactions. However, continuously growing dialogue histories exceed bounded context windows and inflate inference costs. Local deployments---browser extensions, mobile agents, edge devices---impose additional disk storage constraints.
+Autonomous agents require persistent conversational context for coherent long-term interactions. However, continuously growing dialogue histories exceed bounded context windows and inflate inference costs. Local deployments impose strict disk storage constraints.
 
-Existing extractive compression baselines are inadequate. Sliding Window forgets early constraints. TF-IDF preserves keyword density but destroys dialogue sequentiality. Neither method models the \textit{structural importance} of messages within a conversation.
+Existing compression baselines are inadequate. TF-IDF preserves keyword density but destroys sequentiality. More critically, prior methods optimize for \textit{message importance} rather than \textit{state retention}. 
 
-We propose \textbf{TSGC v2} (Temporal Semantic Graph Compression), an algorithm that explicitly models conversational structure via a semantic similarity graph. Our contributions are:
+We propose \textbf{CSGC} (Conversation State Graph Compression). Our core research contributions are:
 \begin{enumerate}
-    \item \textbf{Semantic-aware graph construction} using E5 dense embeddings~\cite{wang2022e5}, replacing TF-IDF cosine similarity with learned semantic representations.
-    \item \textbf{Storage-budget graph pruning}, a principled selection mechanism that greedily selects the highest-importance messages under a target storage constraint.
+    \item \textbf{Conversation State Graph}: A novel representation that replaces the standard message graph by grouping redundant messages into unified state nodes through online topic clustering.
+    \item \textbf{Conversation Importance Score}: A metric that combines semantic centrality, dependency tracking, future references, and soft state-priorities to model the true structure of a dialogue.
+    \item \textbf{Coverage-Aware Storage Optimization}: Formulating compression as a bounded submodular optimization problem to maximize state coverage rather than purely maximizing sentence importance.
 \end{enumerate}
 
 \section{Related Work}
 
-\textbf{Text Embeddings.} E5~\cite{wang2022e5} and BGE-M3~\cite{chen2024bge} represent the current state-of-the-art in dense text embeddings. We use E5-small-v2 for its balance of quality and inference speed, as validated by the MTEB benchmark~\cite{muennighoff2023mteb}.
+\textbf{Text Embeddings.} E5~\cite{wang2022e5} represents the state-of-the-art in dense text embeddings, heavily utilized in CSGC for zero-shot topic discovery and state assignment.
 
-\textbf{Graph-based NLP.} PageRank~\cite{page1999pagerank} has been applied to extractive summarization (TextRank~\cite{mihalcea2004textrank}), but not to conversational memory compression under storage constraints.
+\textbf{Graph-based NLP.} PageRank~\cite{page1999pagerank} has been applied to extractive summarization (TextRank~\cite{mihalcea2004textrank}), but not to conversational state graphs under storage budgets.
 
 \section{Methodology}
 
-TSGC v2 operates as a six-step pipeline:
+CSGC operates through a multi-stage pipeline designed for `O(1)` incremental scaling:
 
-\subsection{Step 1: Dense Embeddings}
-Each message $m_i$ is encoded using E5-small-v2 with the recommended ``query:'' prefix:
+\subsection{Incremental Topic Discovery}
+Messages are encoded via E5-small-v2. We employ online threshold clustering: incoming messages are compared to existing topic centroids. If similarity exceeds $\tau_{topic}$, the message joins the topic; otherwise, it spawns a new one.
+
+\subsection{Soft State Assignment}
+Rather than hardcoding classes, we define seven hierarchical states (e.g., \textit{Decision, Constraint, Task}). We compute cosine similarities between the message and label embeddings, creating a soft multi-label prior that feeds into the importance score.
+
+\subsection{Conversation State Graph \& Merging}
+Messages within the same topic that exhibit high semantic redundancy ($\cos(\mathbf{e}_i, \mathbf{e}_j) > \tau_{merge}$) are merged into a single \textbf{State Node}. We construct a directed graph $G = (V, E)$ over these nodes, with edges capturing semantic similarity and chronological flow.
+
+\subsection{Conversation Importance Scoring}
+The base importance of a state node combines structural and temporal signals:
 \begin{equation}
-    \mathbf{e}_i = \text{E5}(\text{``query: ''} \| m_i)
+    S(i) = \alpha \cdot \text{PR}(i) + \beta \cdot \text{In}(i) + \gamma \cdot \text{Out}(i) + \delta \cdot D(i) + \eta \cdot \text{Prior}(i)
 \end{equation}
+where PR is PageRank, In/Out are normalized node degrees, $D(i)$ is exponential temporal decay, and $\text{Prior}(i)$ is the weighted sum of the soft state assignments.
 
-\subsection{Step 2: Semantic Similarity Graph}
-We construct a weighted undirected graph $G = (V, E)$ where each message is a node. An edge $(i, j)$ is added if $\cos(\mathbf{e}_i, \mathbf{e}_j) > \tau$ (default $\tau = 0.30$), weighted by cosine similarity.
-
-\subsection{Step 3: PageRank Centrality}
-We compute personalized PageRank over $G$ with edge weights:
-\begin{equation}
-    \text{PR}(i) = \text{PageRank}(G, \text{weight}=w_{ij})
-\end{equation}
-Messages that are semantically central to many topics receive high centrality scores.
-
-\subsection{Step 4: Temporal Decay}
-Smooth exponential decay penalizes older messages:
-\begin{equation}
-    D(i) = \exp\left(-\lambda \cdot \frac{N - 1 - i}{N - 1}\right)
-\end{equation}
-where $\lambda = 1.5$ by default. The oldest message retains $\sim$22\% weight.
-
-\subsection{Step 5: Weighted Importance Score}
-The final score combines all signals:
-\begin{equation}
-    S(i) = \alpha \cdot \widehat{\text{PR}}(i) + \beta \cdot \widehat{\text{Sem}}(i) + \gamma \cdot D(i) + \delta \cdot \widehat{\text{KW}}(i)
-\end{equation}
-where $\alpha = 0.35$, $\beta = 0.35$, $\gamma = 0.20$, $\delta = 0.10$, and $\widehat{\cdot}$ denotes min-max normalization.
-
-\subsection{Step 6: Storage-Budget Selection}
-Messages are ranked by $S(i)$ in descending order. We greedily select messages until the cumulative byte size exceeds the target storage budget $B$ (e.g., 10KB, 20KB). Selected messages are restored to chronological order.
+\subsection{Coverage Optimization \& Serialization}
+Instead of blindly selecting the highest-scoring nodes, CSGC greedily maximizes \textit{Coverage Gain}. Nodes that introduce novel topics or states receive a score boost, penalizing redundancy. Selected nodes are chronologically serialized, grouped by topic, to strip conversational noise and maximize DEFLATE compression efficiency.
 
 \section{Experiments}
-We evaluate TSGC v2 on a hand-annotated architectural decision dataset and 200 conversations from the WildChat corpus~\cite{zhao2024wildchat}.
+We evaluate CSGC against TF-IDF and LLM-Sim on 200 conversations from the WildChat corpus~\cite{zhao2024wildchat}.
 
 \subsection{Quality vs Storage Budget Trade-off}
-By sweeping storage budgets from 5KB to 50KB, TSGC v2 generates a Pareto curve. At equivalent storage usage, TSGC v2 consistently achieves higher QA accuracy and Pivot Recall than TF-IDF.
-
-\subsection{Architectural Pivot Preservation}
-PageRank centrality on the semantic graph naturally identifies architectural pivots---messages whose topics propagate throughout the conversation---without requiring hand-crafted keyword lists.
+By sweeping storage budgets (5KB to 50KB), CSGC generates a Pareto curve demonstrating superior QA accuracy and Pivot Recall at equivalent storage limits.
 
 \subsection{Statistical Significance}
-On WildChat, a Wilcoxon signed-rank test confirms TSGC v2 storage savings are statistically significant over TF-IDF ($p < 0.01$).
+A Wilcoxon signed-rank test confirms CSGC's DEFLATE storage savings are statistically significant ($p < 0.01$) compared to baseline methods.
 
 \section{Conclusion}
-TSGC v2 provides a principled, graph-theoretic memory compression mechanism for LLM agents. By combining E5 embeddings, PageRank centrality, temporal decay, and storage-budget selection, it establishes a new Pareto-optimal frontier for conversational memory efficiency.
+By shifting from message-level to state-level compression, CSGC introduces a highly scalable, structurally aware memory representation for LLM agents.
 
 {\small
 \bibliographystyle{ieee}

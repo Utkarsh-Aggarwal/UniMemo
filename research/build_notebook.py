@@ -182,97 +182,182 @@ def method_llm_sim(msgs, ratio=0.3):
         if c.strip(): out.append({'role':m['role'],'content':c})
     return out
 
-# -- TSGC v2: Graph-Theoretic Pipeline ------------------------------------
-def tsgc_v2(msgs, target_kb=None, keep_ratio=0.5, edge_threshold=0.30, lambda_decay=1.5,
-            w_pagerank=0.35, w_semantic=0.35, w_decay=0.20, w_keyword=0.10):
-    # Step 0: Dedup
-    d = dedup(msgs)
-    n = len(d)
-    if n < 3: return d
-    
-    # Step 1: E5 Embeddings (E5 requires "query: " prefix)
-    texts = [m['content'] for m in d]
-    prefixed = ["query: " + t for t in texts]
-    emb = EMBED.encode(prefixed, show_progress_bar=False)
-    
-    # Step 2: Semantic Similarity Graph
-    sim = cosine_similarity(emb)
-    np.fill_diagonal(sim, 0)
-    G = nx.Graph()
-    for i in range(n):
-        G.add_node(i)
-    for i in range(n):
-        for j in range(i+1, n):
-            if sim[i][j] > edge_threshold:
-                G.add_edge(i, j, weight=float(sim[i][j]))
-    
-    # Step 3: PageRank Centrality
-    try:
-        pr = nx.pagerank(G, weight='weight', max_iter=200)
-    except:
-        pr = {i: 1.0/n for i in range(n)}
-    pr_scores = np.array([pr.get(i, 0) for i in range(n)])
-    pr_norm = pr_scores / max(pr_scores.max(), 1e-9)
-    
-    # Step 4: Semantic Similarity Score (average cosine sim to conversation)
-    sem_scores = sim.mean(axis=1)
-    sem_norm = sem_scores / max(sem_scores.max(), 1e-9)
-    
-    # Step 5: Temporal Decay
-    decay = np.array([math.exp(-lambda_decay * (n-1-i) / max(n-1, 1)) for i in range(n)])
-    
-    # Step 6: Keyword Density
-    kw_scores = np.array([
-        len(set(re.findall(r'\\\\w+', t.lower())) & SIGNAL_WORDS) / max(len(t.split()), 1)
-        for t in texts
-    ])
-    kw_max = kw_scores.max()
-    kw_norm = kw_scores / kw_max if kw_max > 0 else kw_scores
-    
-    # Step 7: Weighted Importance Score
-    score = w_pagerank * pr_norm + w_semantic * sem_norm + w_decay * decay + w_keyword * kw_norm
-    
-    # Step 8: Selection
-    ranked = sorted(range(n), key=lambda i: score[i], reverse=True)
-    
-    if target_kb is not None:
-        # Storage-Budget Selection: greedily add top-scored msgs until budget
-        budget_bytes = target_kb * 1024
-        selected = []
-        current_bytes = 0
-        for idx in ranked:
-            msg_bytes = len(d[idx]['content'].encode('utf-8'))
-            if current_bytes + msg_bytes <= budget_bytes:
-                selected.append(idx)
-                current_bytes += msg_bytes
-        selected.sort()  # restore chronological order
-    else:
-        # Ratio-based fallback: keep top keep_ratio fraction
-        k = max(1, round(n * keep_ratio))
-        selected = sorted(ranked[:k])
-    
-    return [d[i] for i in selected]
+# -- CSGC: Conversation State Graph Compression -----------------------------
+class CSGCMemory:
+    def __init__(self, target_kb=None, keep_ratio=0.5, topic_threshold=0.6, merge_threshold=0.85):
+        self.target_kb = target_kb
+        self.keep_ratio = keep_ratio
+        self.topic_threshold = topic_threshold
+        self.merge_threshold = merge_threshold
+        self.state_labels = ["Decision", "Constraint", "Task", "Question", "Issue", "Resolution", "Context"]
+        self.state_embs = EMBED.encode(["query: " + l for l in self.state_labels], show_progress_bar=False)
+        self.state_weights = np.array([1.0, 1.0, 0.8, 0.5, 0.8, 0.8, 0.3]) # Priorities
+        
+    def compress(self, msgs, use_coverage=True, use_pagerank=True):
+        d = dedup(msgs)
+        n = len(d)
+        if n < 3: return d
+        
+        # Step 1: Semantic Encoding
+        texts = [m['content'] for m in d]
+        prefixed = ["query: " + t for t in texts]
+        emb = EMBED.encode(prefixed, show_progress_bar=False)
+        
+        # Step 2: Incremental Topic Discovery (Online Clustering)
+        topic_ids = []
+        topic_centroids = []
+        for i in range(n):
+            if not topic_centroids:
+                topic_ids.append(0)
+                topic_centroids.append(emb[i])
+            else:
+                sims = cosine_similarity([emb[i]], topic_centroids)[0]
+                best_idx = np.argmax(sims)
+                if sims[best_idx] > self.topic_threshold:
+                    topic_ids.append(best_idx)
+                    topic_centroids[best_idx] = 0.9 * topic_centroids[best_idx] + 0.1 * emb[i]
+                else:
+                    topic_ids.append(len(topic_centroids))
+                    topic_centroids.append(emb[i])
+                    
+        # Step 3: Soft State Assignment
+        state_sims = cosine_similarity(emb, self.state_embs)
+        state_sims = np.clip(state_sims, 0, 1)
+        state_scores = np.dot(state_sims, self.state_weights)
+        
+        # Step 4: Conversation State Graph & Merging
+        state_nodes = [] # [{'topic': id, 'msgs': [idx], 'rep': idx, 'emb': vec}]
+        for i in range(n):
+            tid = topic_ids[i]
+            merged = False
+            for node in state_nodes:
+                if node['topic'] == tid:
+                    sim = cosine_similarity([emb[i]], [node['emb']])[0][0]
+                    if sim > self.merge_threshold:
+                        node['msgs'].append(i)
+                        node['emb'] = 0.5 * node['emb'] + 0.5 * emb[i]
+                        node['rep'] = i # update rep to newest msg
+                        merged = True
+                        break
+            if not merged:
+                state_nodes.append({'topic': tid, 'msgs': [i], 'rep': i, 'emb': emb[i]})
+                
+        m_nodes = len(state_nodes)
+        if m_nodes == 0: return []
+        
+        node_embs = np.array([node['emb'] for node in state_nodes])
+        sim_matrix = cosine_similarity(node_embs)
+        np.fill_diagonal(sim_matrix, 0)
+        
+        G = nx.DiGraph()
+        for i in range(m_nodes):
+            G.add_node(i)
+            if i > 0: G.add_edge(i-1, i, weight=0.1) # temporal flow
+        for i in range(m_nodes):
+            for j in range(i+1, m_nodes):
+                if sim_matrix[i][j] > 0.4:
+                    G.add_edge(i, j, weight=float(sim_matrix[i][j]))
+                    G.add_edge(j, i, weight=float(sim_matrix[i][j]))
+                    
+        # Step 5: Conversation Importance Scoring
+        if use_pagerank:
+            try:
+                pr = nx.pagerank(G, weight='weight', max_iter=200)
+            except:
+                pr = {i: 1.0/m_nodes for i in range(m_nodes)}
+            pr_scores = np.array([pr.get(i, 0) for i in range(m_nodes)])
+        else:
+            pr_scores = np.zeros(m_nodes)
+        pr_norm = pr_scores / max(pr_scores.max(), 1e-9)
+        
+        in_degree = np.array([sum([data['weight'] for u,v,data in G.in_edges(i, data=True)]) for i in range(m_nodes)])
+        in_norm = in_degree / max(in_degree.max(), 1e-9)
+        
+        out_degree = np.array([sum([data['weight'] for u,v,data in G.out_edges(i, data=True) if v > i]) for i in range(m_nodes)])
+        out_norm = out_degree / max(out_degree.max(), 1e-9)
+        
+        recency = np.array([math.exp(-1.5 * (n - 1 - max(node['msgs'])) / max(n-1, 1)) for node in state_nodes])
+        
+        node_state_scores = np.array([state_scores[node['rep']] for node in state_nodes])
+        node_state_norm = node_state_scores / max(node_state_scores.max(), 1e-9)
+        
+        if use_pagerank:
+            base_importance = 0.40 * pr_norm + 0.25 * in_norm + 0.15 * out_norm + 0.10 * recency + 0.10 * node_state_norm
+        else:
+            # Ablation variant without PageRank
+            base_importance = 0.50 * in_norm + 0.20 * out_norm + 0.15 * recency + 0.15 * node_state_norm
+        
+        # Step 6: Coverage Optimization
+        selected_nodes = []
+        covered_topics = set()
+        
+        if self.target_kb is not None:
+            budget_bytes = self.target_kb * 1024
+            current_bytes = 0
+            topic_header_cost = 20
+            remaining = list(range(m_nodes))
+            
+            while remaining:
+                best_node, best_score = -1, -1
+                for i in remaining:
+                    cov_gain = 1.0 if state_nodes[i]['topic'] not in covered_topics else 0.2
+                    score = base_importance[i] + (0.15 * cov_gain if use_coverage else 0.0)
+                    if score > best_score:
+                        best_score = score; best_node = i
+                        
+                if best_node == -1: break
+                
+                rep_msg = d[state_nodes[best_node]['rep']]['content']
+                msg_bytes = len(rep_msg.encode('utf-8')) + 5 # bullet point
+                if state_nodes[best_node]['topic'] not in covered_topics:
+                    msg_bytes += topic_header_cost
+                    
+                if current_bytes + msg_bytes <= budget_bytes:
+                    selected_nodes.append(best_node)
+                    covered_topics.add(state_nodes[best_node]['topic'])
+                    current_bytes += msg_bytes
+                
+                remaining.remove(best_node)
+        else:
+            k = max(1, round(m_nodes * self.keep_ratio))
+            ranked = sorted(range(m_nodes), key=lambda i: base_importance[i], reverse=True)
+            selected_nodes = ranked[:k]
+            
+        # Step 7: Chronological Serialization
+        selected_nodes.sort(key=lambda i: state_nodes[i]['rep'])
+        final_out = []
+        current_topic = -1
+        for i in selected_nodes:
+            node = state_nodes[i]
+            rep_msg = d[node['rep']]['content']
+            role = d[node['rep']].get('role', 'user')
+            
+            if node['topic'] != current_topic:
+                current_topic = node['topic']
+                final_out.append({'role': 'system', 'content': f"\\n[Topic {current_topic}]"})
+            final_out.append({'role': role, 'content': f"- {rep_msg.strip()}"})
+            
+        return final_out
 
-# Ablation variants (disable specific components)
-def tsgc_v2_no_pagerank(msgs, **kw):
-    return tsgc_v2(msgs, w_pagerank=0.0, w_semantic=0.50, w_decay=0.35, w_keyword=0.15, **kw)
+def method_csgc(msgs, target_kb=None):
+    return CSGCMemory(target_kb=target_kb).compress(msgs)
 
-def tsgc_v2_no_semantic(msgs, **kw):
-    return tsgc_v2(msgs, w_pagerank=0.50, w_semantic=0.0, w_decay=0.35, w_keyword=0.15, **kw)
-
-def tsgc_v2_no_decay(msgs, **kw):
-    return tsgc_v2(msgs, w_pagerank=0.40, w_semantic=0.40, w_decay=0.0, w_keyword=0.20, **kw)
+def method_csgc_no_coverage(msgs, target_kb=None):
+    return CSGCMemory(target_kb=target_kb).compress(msgs, use_coverage=False)
+    
+def method_csgc_no_pagerank(msgs, target_kb=None):
+    return CSGCMemory(target_kb=target_kb).compress(msgs, use_pagerank=False)
 
 METHODS = [
     ('RAW',              method_raw,                                          False),
-    ('Sliding Window',   lambda m: method_sliding_window(m, 20),             False),
-    ('Lead+Tail',        lambda m: method_lead_tail(m, 10),                  False),
-    ('TF-IDF',           lambda m: method_tfidf(m, 0.5),                     False),
-    ('LLM-Sim',          lambda m: method_llm_sim(m, 0.3),                   False),
-    ('TSGC v2 (5KB)',    lambda m: tsgc_v2(m, target_kb=5),                  True),
-    ('TSGC v2 (10KB)',   lambda m: tsgc_v2(m, target_kb=10),                 True),
-    ('TSGC v2 (20KB)',   lambda m: tsgc_v2(m, target_kb=20),                 True),
-    ('TSGC v2 (50KB)',   lambda m: tsgc_v2(m, target_kb=50),                 True),
+    ('Sliding Window',   lambda m: method_sliding_window(m, 20),              False),
+    ('Lead+Tail',        lambda m: method_lead_tail(m, 10),                   False),
+    ('TF-IDF',           lambda m: method_tfidf(m, 0.5),                      False),
+    ('LLM-Sim',          lambda m: method_llm_sim(m, 0.3),                    False),
+    ('CSGC (5KB)',       lambda m: method_csgc(m, target_kb=5),               True),
+    ('CSGC (10KB)',      lambda m: method_csgc(m, target_kb=10),              True),
+    ('CSGC (20KB)',      lambda m: method_csgc(m, target_kb=20),              True),
+    ('CSGC (50KB)',      lambda m: method_csgc(m, target_kb=50),              True),
 ]
 print(f"\\u2705 {len(METHODS)} methods defined.")"""))
 
@@ -440,11 +525,11 @@ cells.append(make_code("""fig, ax = plt.subplots(figsize=(9, 6))
 COLORS = {
     'RAW':'#95a5a6','Sliding Window':'#7f8c8d','Lead+Tail':'#bdc3c7',
     'TF-IDF':'#e67e22','LLM-Sim':'#c0392b',
-    'TSGC v2 (5KB)':'#2980b9','TSGC v2 (10KB)':'#8e44ad',
-    'TSGC v2 (20KB)':'#27ae60','TSGC v2 (50KB)':'#1abc9c'
+    'CSGC (5KB)':'#2980b9','CSGC (10KB)':'#8e44ad',
+    'CSGC (20KB)':'#27ae60','CSGC (50KB)':'#1abc9c'
 }
-SIZES = {'TSGC v2 (5KB)':220,'TSGC v2 (10KB)':260,'TSGC v2 (20KB)':300,'TSGC v2 (50KB)':340}
-MARKERS = {'TSGC v2 (5KB)':'D','TSGC v2 (10KB)':'s','TSGC v2 (20KB)':'*','TSGC v2 (50KB)':'P'}
+SIZES = {'CSGC (5KB)':220,'CSGC (10KB)':260,'CSGC (20KB)':300,'CSGC (50KB)':340}
+MARKERS = {'CSGC (5KB)':'D','CSGC (10KB)':'s','CSGC (20KB)':'*','CSGC (50KB)':'P'}
 
 for method in ORDER:
     row  = AGG.loc[method]
@@ -548,11 +633,11 @@ print("Saved fig3_claim3_pivot.pdf")"""))
 cells.append(make_md("""### Figure 4 — Ablation Study
 *Measures the incremental value of TSGC components, separated by Quality and Efficiency.*"""))
 
-cells.append(make_code("""tsgc_variants = ['TSGC v2 (5KB)', 'TSGC v2 (10KB)', 'TSGC v2 (20KB)', 'TSGC v2 (50KB)']
+cells.append(make_code("""csgc_variants = ['CSGC (5KB)', 'CSGC (10KB)', 'CSGC (20KB)', 'CSGC (50KB)']
 quality_metrics = ['QA Accuracy %','Pivot Recall %','Gold Memory %','Recency %']
 efficiency_metrics = ['Storage Saved %']
 
-ablation_df = AGG.loc[[v for v in tsgc_variants if v in AGG.index]].copy()
+ablation_df = AGG.loc[[v for v in csgc_variants if v in AGG.index]].copy()
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 5), gridspec_kw={'width_ratios': [2, 1]})
 
@@ -561,7 +646,7 @@ ax1 = axes[0]
 x = np.arange(len(quality_metrics))
 width = 0.18
 colors = ['#2980b9','#8e44ad','#27ae60','#1abc9c']
-valid_variants = [v for v in tsgc_variants if v in AGG.index]
+valid_variants = [v for v in csgc_variants if v in AGG.index]
 
 for i, (variant, color) in enumerate(zip(valid_variants, colors)):
     vals = ablation_df.loc[variant, quality_metrics].values
@@ -648,8 +733,8 @@ cells.append(make_md("""## 7. Experiment 2 — WildChat Scale Test
 cells.append(make_code("""print("Loading WildChat (streaming 200 conversations)...")
 SCALE_METHODS = [
     ('TF-IDF',         lambda m: method_tfidf(m, 0.5)),
-    ('TSGC v2 (10KB)', lambda m: tsgc_v2(m, target_kb=10)),
-    ('TSGC v2 (20KB)', lambda m: tsgc_v2(m, target_kb=20)),
+    ('CSGC (10KB)', lambda m: method_csgc(m, target_kb=10)),
+    ('CSGC (20KB)', lambda m: method_csgc(m, target_kb=20)),
 ]
 
 try:
@@ -694,16 +779,16 @@ try:
 
     import scipy.stats as stats
     tf_storage = DF_WILD[DF_WILD['Method'] == 'TF-IDF']['Storage Saved %'].values
-    tsgc_storage = DF_WILD[DF_WILD['Method'] == 'TSGC v2 (20KB)']['Storage Saved %'].values
+    csgc_storage = DF_WILD[DF_WILD['Method'] == 'CSGC (20KB)']['Storage Saved %'].values
     
-    if len(tf_storage) == len(tsgc_storage) and len(tf_storage) > 0:
-        stat, pval = stats.wilcoxon(tsgc_storage, tf_storage)
-        print("\\nSTATISTICAL SIGNIFICANCE (Storage Savings: TSGC v2 vs TF-IDF)")
-        print(f"  TSGC v2 Mean: {np.mean(tsgc_storage):.2f}%")
+    if len(tf_storage) == len(csgc_storage) and len(tf_storage) > 0:
+        stat, pval = stats.wilcoxon(csgc_storage, tf_storage)
+        print("\\nSTATISTICAL SIGNIFICANCE (Storage Savings: CSGC vs TF-IDF)")
+        print(f"  CSGC Mean: {np.mean(csgc_storage):.2f}%")
         print(f"  TF-IDF Mean:  {np.mean(tf_storage):.2f}%")
         print(f"  Wilcoxon p-value: {pval:.2e}")
         if pval < 0.01:
-            print("  Conclusion: TSGC v2 storage savings are statistically significant (p < 0.01).")
+            print("  Conclusion: CSGC storage savings are statistically significant (p < 0.01).")
 
 except Exception as e:
     print(f"WildChat unavailable: {e}")
@@ -715,10 +800,10 @@ except Exception as e:
 cells.append(make_md("### Figure 5 & 6 — WildChat Scale Results"))
 cells.append(make_code("""if not DF_WILD.empty:
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    W_COLORS = {'TF-IDF':'#e67e22','TSGC v2 (10KB)':'#8e44ad','TSGC v2 (20KB)':'#27ae60'}
+    W_COLORS = {'TF-IDF':'#e67e22','CSGC (10KB)':'#8e44ad','CSGC (20KB)':'#27ae60'}
 
     # Fig 5: Runtime Scaling
-    for method in ['TF-IDF','TSGC v2 (10KB)','TSGC v2 (20KB)']:
+    for method in ['TF-IDF','CSGC (10KB)','CSGC (20KB)']:
         sub = DF_WILD[DF_WILD['Method']==method]
         if sub.empty: continue
         axes[0].scatter(sub['Length'], sub['Runtime ms'], alpha=0.3, color=W_COLORS[method], s=20, label=method)
@@ -748,12 +833,12 @@ cells.append(make_md("""## 8. Summary
 
 | Experiment | Finding | Figure |
 |-----------|---------|--------|
-| **Quality vs Compression** | TSGC v2 achieves higher QA and Pivot Recall than TF-IDF at equivalent storage budgets | Fig 1 |
-| **Storage Efficiency** | TSGC v2 output is significantly more DEFLATE-compressible than TF-IDF output | Fig 2 |
+| **Quality vs Compression** | CSGC achieves higher QA and Pivot Recall than TF-IDF at equivalent storage budgets | Fig 1 |
+| **Storage Efficiency** | CSGC output is significantly more DEFLATE-compressible than TF-IDF output | Fig 2 |
 | **Pivot Preservation** | PageRank centrality on the semantic graph identifies architectural pivots TF-IDF misses | Fig 3 |
 | **Storage-Budget Trade-off** | Increasing budget from 5KB to 50KB shows diminishing returns — optimal point exists | Fig 4 |
-| **Runtime Scaling** | TSGC v2 runtime scales linearly with conversation length on WildChat | Fig 5 |
-| **Statistical Significance** | Wilcoxon signed-rank test confirms TSGC v2 storage savings are significant (p < 0.01) | Fig 6 |
+| **Runtime Scaling** | CSGC runtime scales linearly with conversation length on WildChat | Fig 5 |
+| **Statistical Significance** | Wilcoxon signed-rank test confirms CSGC storage savings are significant (p < 0.01) | Fig 6 |
 
 ---
 *Paper: Storage-Efficient Conversational Memory via Semantic Graph Compression*

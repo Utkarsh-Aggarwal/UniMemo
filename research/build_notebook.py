@@ -261,7 +261,36 @@ def unified_tsgc(msgs, use_novelty=False, use_acts=False):
 
 def method_tsgc(msgs): return unified_tsgc(msgs, False, False)
 def method_tsgc_ag(msgs): return unified_tsgc(msgs, True, False)
-def method_tsgc_at(msgs): return unified_tsgc(msgs, True, True)
+def method_tsgc_at(msgs, drop=0.25): 
+    # Wrapper to inject custom drop threshold if needed
+    d = dedup(msgs)
+    n = len(d)
+    if n < 3: return d
+    texts = [m['content'] for m in d]
+    emb = EMBED.encode(texts, show_progress_bar=False)
+    sim = cosine_similarity(emb)
+    np.fill_diagonal(sim, 0)
+    temporal = np.array([_smooth_temporal_decay(i, n) for i in range(n)])
+    dependency = np.zeros(n)
+    for i in range(n):
+        if i < n - 1:
+            dependency[i] = sim[i, i+1:].sum()
+    if dependency.max() > 0:
+        dependency = dependency / dependency.max()
+    novelty = np.zeros(n)
+    for i in range(n):
+        if i > 0: novelty[i] = max(0, 1.0 - sim[i, :i].max())
+        else: novelty[i] = 1.0
+    acts = get_conversation_acts(texts, emb)
+    pivots = get_pivot_scores(texts)
+    out = []
+    for i, m in enumerate(d):
+        score = 0.20 * temporal[i] + 0.30 * dependency[i] + 0.20 * novelty[i] + 0.15 * acts[i] + 0.15 * pivots[i]
+        ratio = min(1.0, score)
+        if ratio < drop: continue
+        c = compress_text(m['content'], ratio)
+        if c.strip(): out.append({'role': m['role'], 'content': c})
+    return out
 
 METHODS = [
     ('RAW',            method_raw,                            False),
@@ -269,9 +298,12 @@ METHODS = [
     ('Lead+Tail',      lambda m: method_lead_tail(m,10),      False),
     ('TF-IDF',         lambda m: method_tfidf(m,0.5),         False),
     ('LLM-Sim',        lambda m: method_llm_sim(m,0.3),       False),
-    ('TSGC',           method_tsgc,                           True),
+    ('TSGC Base',      method_tsgc,                           True),
     ('TSGC-AG',        method_tsgc_ag,                        True),
-    ('TSGC-AT',        method_tsgc_at,                        True),
+    ('TSGC-AT (d=0.10)', lambda m: method_tsgc_at(m, drop=0.10), True),
+    ('TSGC-AT (d=0.20)', lambda m: method_tsgc_at(m, drop=0.20), True),
+    ('TSGC-AT (d=0.30)', lambda m: method_tsgc_at(m, drop=0.30), True),
+    ('TSGC-AT (d=0.40)', lambda m: method_tsgc_at(m, drop=0.40), True),
 ]
 print(f"✅ {len(METHODS)} methods defined.")"""))
 
@@ -462,7 +494,7 @@ ax.text(2, AGG['QA Accuracy %'].max()*0.89, 'High-quality zone', fontsize=8, col
 
 ax.set_xlabel('Compression Ratio (%) — higher is smaller output')
 ax.set_ylabel('QA Accuracy (%) — higher is better')
-ax.set_title('Figure 1: Claim 1 — TSGC Dominates the Quality-Efficiency Tradeoff', fontweight='bold')
+ax.set_title('Figure 1: Quality vs Compression Efficiency Trade-off', fontweight='bold')
 ax.legend(loc='lower left', framealpha=0.9)
 plt.tight_layout()
 plt.savefig('fig1_claim1_tradeoff.pdf', bbox_inches='tight')
@@ -486,7 +518,7 @@ for bar, method in zip(bars, ORDER):
     ax.text(bar.get_x()+bar.get_width()/2, v+0.5, f'{v:.1f}%', ha='center', va='bottom', fontsize=8.5)
 
 ax.set_ylabel('Storage Saved After DEFLATE Compression (%)')
-ax.set_title('Figure 2: Claim 2 — TSGC Output is More Compressible Than TF-IDF Output', fontweight='bold')
+ax.set_title('Figure 2: Storage Optimization (DEFLATE Compression Savings)', fontweight='bold')
 ax.set_xticklabels(ORDER, rotation=25, ha='right')
 
 legend_elements = [
@@ -534,7 +566,7 @@ axes[1].set_ylabel('Pivot Recall (%)')
 axes[1].set_title('3b: Pareto Frontier — Pivot Recall vs Compression', fontweight='bold')
 axes[1].legend(loc='lower left', fontsize=8, framealpha=0.9)
 
-fig.suptitle('Figure 3: Claim 3 — TSGC Preserves Architectural Decision Pivots', fontweight='bold', fontsize=13)
+fig.suptitle('Figure 3: Architectural Pivot Preservation', fontweight='bold', fontsize=13)
 plt.tight_layout()
 plt.savefig('fig3_claim3_pivot.pdf', bbox_inches='tight')
 plt.show()
@@ -544,33 +576,97 @@ print("Saved fig3_claim3_pivot.pdf")"""))
 # CELL 12 — FIGURE 4: ABLATION STUDY
 # ─────────────────────────────────────────────────────────────
 cells.append(make_md("""### Figure 4 — Ablation Study
-*Each TSGC variant adds measurable improvement. Proves the design choices are non-trivial.*"""))
+*Measures the incremental value of TSGC components, separated by Quality and Efficiency.*"""))
 
-cells.append(make_code("""tsgc_variants = [m for m in ORDER if 'TSGC' in m]
-ablation_metrics = ['QA Accuracy %','Pivot Recall %','Gold Memory %','Recency %','Storage Saved %']
+cells.append(make_code("""tsgc_variants = ['TSGC Base', 'TSGC-AG', 'TSGC-AT (d=0.20)']
+quality_metrics = ['QA Accuracy %','Pivot Recall %','Gold Memory %','Recency %']
+efficiency_metrics = ['Storage Saved %']
 
-ablation_df = AGG.loc[tsgc_variants, ablation_metrics].copy()
+ablation_df = AGG.loc[tsgc_variants].copy()
 
-fig, ax = plt.subplots(figsize=(10, 5))
-x     = np.arange(len(ablation_metrics))
+fig, axes = plt.subplots(1, 2, figsize=(14, 5), gridspec_kw={'width_ratios': [2, 1]})
+
+# 4a: Quality
+ax1 = axes[0]
+x = np.arange(len(quality_metrics))
 width = 0.22
-variant_colors = ['#2980b9','#8e44ad','#27ae60']
+colors = ['#2980b9','#8e44ad','#27ae60']
 
-for i, (variant, color) in enumerate(zip(tsgc_variants, variant_colors)):
-    vals = ablation_df.loc[variant].values
-    bars = ax.bar(x + i*width - width, vals, width, label=variant, color=color, alpha=0.85, edgecolor='black', linewidth=0.7)
+for i, (variant, color) in enumerate(zip(tsgc_variants, colors)):
+    vals = ablation_df.loc[variant, quality_metrics].values
+    bars = ax1.bar(x + i*width - width, vals, width, label=variant, color=color, alpha=0.85, edgecolor='black', linewidth=0.7)
     for bar, v in zip(bars, vals):
-        ax.text(bar.get_x()+bar.get_width()/2, v+0.3, f'{v:.0f}', ha='center', va='bottom', fontsize=7.5)
+        ax1.text(bar.get_x()+bar.get_width()/2, v+0.5, f'{v:.0f}', ha='center', va='bottom', fontsize=8)
 
-ax.set_xticks(x - width/2)
-ax.set_xticklabels([m.replace(' %','') for m in ablation_metrics])
-ax.set_ylabel('Score (%)')
-ax.set_title('Figure 4: Ablation Study — Each TSGC Enhancement Adds Measurable Value', fontweight='bold')
-ax.legend()
+ax1.set_xticks(x)
+ax1.set_xticklabels([m.replace(' %','') for m in quality_metrics])
+ax1.set_ylabel('Score (%)')
+ax1.set_title('4a: Quality Metrics Ablation', fontweight='bold')
+ax1.legend()
+
+# 4b: Efficiency
+ax2 = axes[1]
+x2 = np.arange(len(efficiency_metrics))
+
+for i, (variant, color) in enumerate(zip(tsgc_variants, colors)):
+    vals = ablation_df.loc[variant, efficiency_metrics].values
+    bars = ax2.bar(x2 + i*width - width, vals, width, label=variant, color=color, alpha=0.85, edgecolor='black', linewidth=0.7)
+    for bar, v in zip(bars, vals):
+        ax2.text(bar.get_x()+bar.get_width()/2, v+0.5, f'{v:.0f}', ha='center', va='bottom', fontsize=8)
+
+ax2.set_xticks(x2)
+ax2.set_xticklabels([m.replace(' %','') for m in efficiency_metrics])
+ax2.set_title('4b: Efficiency Metrics Ablation', fontweight='bold')
+
+plt.suptitle('Figure 4: Ablation Study', fontweight='bold', fontsize=14)
 plt.tight_layout()
 plt.savefig('fig4_ablation.pdf', bbox_inches='tight')
 plt.show()
 print("Saved fig4_ablation.pdf")"""))
+
+# ─────────────────────────────────────────────────────────────
+# CELL 12B — NEW VISUALIZATIONS (HEATMAP & DEPENDENCY)
+# ─────────────────────────────────────────────────────────────
+cells.append(make_md("""### Figure 4b — TSGC Internal Mechanics
+*Visualizing the N x N Semantic Similarity Heatmap and the Future Dependency Score.*"""))
+
+cells.append(make_code("""# Pick a complex conversation (e.g., index 3)
+conv_idx = 3
+if conv_idx < len(DATA):
+    sample_msgs = dedup([m for m in DATA[conv_idx]['messages'] if m.get('content')])
+    n = len(sample_msgs)
+    if n > 5:
+        texts = [m['content'] for m in sample_msgs]
+        emb = EMBED.encode(texts, show_progress_bar=False)
+        sim = cosine_similarity(emb)
+        
+        # Calculate dependency exactly as in TSGC
+        dependency = np.zeros(n)
+        for i in range(n):
+            if i < n - 1:
+                dependency[i] = sim[i, i+1:].sum()
+        if dependency.max() > 0:
+            dependency = dependency / dependency.max()
+            
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        
+        # Heatmap
+        import seaborn as sns
+        sns.heatmap(sim, cmap="YlGnBu", ax=axes[0], cbar=True)
+        axes[0].set_title("Semantic Similarity Heatmap", fontweight='bold')
+        axes[0].set_xlabel("Message Index")
+        axes[0].set_ylabel("Message Index")
+        
+        # Dependency
+        axes[1].plot(range(n), dependency, marker='o', color='#27ae60', linewidth=2)
+        axes[1].set_title("Future Dependency Score", fontweight='bold')
+        axes[1].set_xlabel("Message Index")
+        axes[1].set_ylabel("Normalized Dependency")
+        
+        plt.tight_layout()
+        plt.savefig('fig_mechanics.pdf', bbox_inches='tight')
+        plt.show()
+"""))
 
 # ─────────────────────────────────────────────────────────────
 # CELL 13 — WILDCHAT SCALE TEST
@@ -625,6 +721,19 @@ try:
     print("\\nTABLE 2: WILDCHAT AVERAGES")
     print(DF_WILD.groupby('Method')[['Comp Ratio %','Storage Saved %','Recency %','Runtime ms']].mean().round(1).to_string())
 
+    import scipy.stats as stats
+    tf_storage = DF_WILD[DF_WILD['Method'] == 'TF-IDF']['Storage Saved %'].values
+    tsgc_at_storage = DF_WILD[DF_WILD['Method'] == 'TSGC-AT']['Storage Saved %'].values
+    
+    if len(tf_storage) == len(tsgc_at_storage) and len(tf_storage) > 0:
+        stat, pval = stats.wilcoxon(tsgc_at_storage, tf_storage)
+        print("\\nSTATISTICAL SIGNIFICANCE (Storage Savings: TSGC-AT vs TF-IDF)")
+        print(f"  TSGC-AT Mean: {np.mean(tsgc_at_storage):.2f}%")
+        print(f"  TF-IDF Mean:  {np.mean(tf_storage):.2f}%")
+        print(f"  Wilcoxon p-value: {pval:.2e}")
+        if pval < 0.01:
+            print("  Conclusion: TSGC-AT storage savings are statistically significant (p < 0.01).")
+
 except Exception as e:
     print(f"WildChat unavailable: {e}")
     DF_WILD = pd.DataFrame()"""))
@@ -647,12 +756,12 @@ cells.append(make_code("""if not DF_WILD.empty:
         axes[0].plot(x_tr, np.poly1d(z)(x_tr), color=W_COLORS[method], linewidth=2)
     axes[0].set_xlabel('Conversation Length (chars)')
     axes[0].set_ylabel('Runtime (ms)')
-    axes[0].set_title('Figure 5: Runtime Scaling on WildChat (Linear = Production-Ready)', fontweight='bold')
+    axes[0].set_title('Figure 5: Runtime Scaling on WildChat', fontweight='bold')
     axes[0].legend()
 
     # Fig 6: Storage Saved Boxplot
     sns.boxplot(data=DF_WILD, x='Method', y='Storage Saved %', ax=axes[1], palette=W_COLORS)
-    axes[1].set_title('Figure 6: Storage Savings on WildChat (TSGC > TF-IDF)', fontweight='bold')
+    axes[1].set_title('Figure 6: Storage Savings Distribution', fontweight='bold')
 
     plt.tight_layout()
     plt.savefig('fig5_fig6_wildchat.pdf', bbox_inches='tight')

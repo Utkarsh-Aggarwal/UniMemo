@@ -183,74 +183,85 @@ def method_llm_sim(msgs, ratio=0.3):
     return out
 
 # -- TSGC Family -----------------------------------------------
-def _tsgc_base_ratio(pos, n, r_recent=0.10, r_mid=0.15, r_floor=0.0):
-    # FIXED: Relative temporal zone ratio (zones are fractions of conversation length).
-    # Zones: Recent (last 10%): Keep 100%, Mid (next 15%): Keep 30%, Old (first 75%): Keep 0% (unless boosted)
-    # Quality floor: 0% means old messages are dropped entirely unless they earn retention via AG/AT.
-    p = n - 1 - pos          # reverse: 0 = oldest, n-1 = most recent
-    pct = p / max(n-1, 1)   # normalised 0..1 (0=oldest, 1=most recent)
-    if pct >= (1 - r_recent):            return 1.0       # recent zone
-    elif pct >= (1 - r_recent - r_mid):  return 0.30      # mid zone
-    else:                                return r_floor    # old zone (floor = 0%)
+def get_conversation_acts(texts, emb):
+    # Zero-shot classification using embeddings
+    act_labels = ["Decision", "Requirement", "Constraint", "Answer", "Question", "Greeting", "Thanks", "Small Talk"]
+    act_weights = {"Decision": 1.0, "Requirement": 0.9, "Constraint": 0.9, "Answer": 0.7, "Question": 0.5, "Greeting": 0.1, "Thanks": 0.05, "Small Talk": 0.0}
+    act_emb = EMBED.encode(act_labels, show_progress_bar=False)
+    sim = cosine_similarity(emb, act_emb)
+    best_acts = sim.argmax(axis=1)
+    return np.array([act_weights[act_labels[idx]] for idx in best_acts])
 
-def method_tsgc(msgs):
-    # TSGC Baseline: pure relative-temporal zone compression.
-    d = dedup(msgs)
-    n = len(d)
-    out = []
-    for i, m in enumerate(d):
-        ratio = _tsgc_base_ratio(i, n)
-        if ratio < 0.20: continue # Drop messages below 20%
-        c = compress_text(m['content'], ratio)
-        if c.strip(): out.append({'role':m['role'],'content':c})
-    return out
+def get_pivot_scores(texts):
+    pivot_keywords = ['instead', 'actually', 'changed', 'switch', 'however']
+    scores = []
+    for text in texts:
+        t = text.lower()
+        if any(k in t for k in pivot_keywords):
+            scores.append(1.0)
+        else:
+            scores.append(0.0)
+    return np.array(scores)
 
-def method_tsgc_ag(msgs):
-    # TSGC-AG: Adaptive Gating via novelty + overlap signals.
-    d = dedup(msgs)
-    n = len(d)
-    seen_sig, prev_words, out = set(), set(), []
-    for i, m in enumerate(d):
-        base  = _tsgc_base_ratio(i, n)
-        words = set(re.findall(r'\\w+', m['content'].lower()))
-        new_sig = words & SIGNAL_WORDS - seen_sig
-        novelty = min(len(new_sig) / 5, 1.0)
-        overlap = len(words & prev_words) / max(len(words | prev_words), 1)
-        gate    = base + 0.60*novelty - 0.20*overlap
-        ratio   = max(0.0, min(1.0, gate))
-        seen_sig |= new_sig
-        prev_words = words
-        if ratio < 0.15: continue
-        c = compress_text(m['content'], ratio)
-        if c.strip(): out.append({'role':m['role'],'content':c})
-    return out
+def _smooth_temporal_decay(pos, n):
+    if n <= 1: return 1.0
+    age = (n - 1 - pos) / (n - 1)
+    # Math.exp(-1.2 * age) smoothly decays from 1.0 to ~0.30
+    return math.exp(-1.2 * age)
 
-def method_tsgc_at(msgs):
-    # TSGC-AT: Semantic Attention via SentenceTransformer embeddings.
-    # Computes NxN cosine similarity over dense embeddings (all-MiniLM-L6-v2).
-    # Exponential distance decay models local coherence. High-attention messages get boosted retention.
+def unified_tsgc(msgs, use_novelty=False, use_acts=False):
     d = dedup(msgs)
     n = len(d)
     if n < 3: return d
     texts = [m['content'] for m in d]
-    emb   = EMBED.encode(texts, show_progress_bar=False)
-    sim   = cosine_similarity(emb)
+    emb = EMBED.encode(texts, show_progress_bar=False)
+    sim = cosine_similarity(emb)
     np.fill_diagonal(sim, 0)
-    # Decay by message distance — nearby messages contribute more to attention
+    
+    # 1. Temporal Decay
+    temporal = np.array([_smooth_temporal_decay(i, n) for i in range(n)])
+    
+    # 2. Future Dependency Score
+    dependency = np.zeros(n)
     for i in range(n):
-        for j in range(n):
-            sim[i,j] *= math.exp(-abs(i-j) / max(n * 0.15, 5))
-    attn      = sim.sum(axis=1)
-    attn_norm = (attn - attn.min()) / max(attn.max()-attn.min(), 1e-9)
+        if i < n - 1:
+            dependency[i] = sim[i, i+1:].sum()
+    if dependency.max() > 0:
+        dependency = dependency / dependency.max()
+        
+    # 3. Semantic Novelty
+    novelty = np.zeros(n)
+    for i in range(n):
+        if i > 0:
+            novelty[i] = max(0, 1.0 - sim[i, :i].max())
+        else:
+            novelty[i] = 1.0
+            
+    # 4 & 5. Conversation Acts & Pivots
+    acts = get_conversation_acts(texts, emb) if use_acts else np.zeros(n)
+    pivots = get_pivot_scores(texts) if use_acts else np.zeros(n)
+    
     out = []
     for i, m in enumerate(d):
-        base  = _tsgc_base_ratio(i, n)
-        boost = attn_norm[i] * 0.90
-        ratio = min(1.0, base + boost)
-        if ratio < 0.30: continue # Drop messages completely if ratio < 30%
+        if use_acts:
+            # Full Formula: TSGC-AT
+            score = 0.20 * temporal[i] + 0.30 * dependency[i] + 0.20 * novelty[i] + 0.15 * acts[i] + 0.15 * pivots[i]
+        elif use_novelty:
+            # Ablation 2: TSGC-AG
+            score = (0.20/0.70) * temporal[i] + (0.30/0.70) * dependency[i] + (0.20/0.70) * novelty[i]
+        else:
+            # Ablation 1: TSGC Base
+            score = 0.40 * temporal[i] + 0.60 * dependency[i]
+            
+        ratio = min(1.0, score)
+        if ratio < 0.25: continue # Drop filler messages entirely
         c = compress_text(m['content'], ratio)
-        if c.strip(): out.append({'role':m['role'],'content':c})
+        if c.strip(): out.append({'role': m['role'], 'content': c})
     return out
+
+def method_tsgc(msgs): return unified_tsgc(msgs, False, False)
+def method_tsgc_ag(msgs): return unified_tsgc(msgs, True, False)
+def method_tsgc_at(msgs): return unified_tsgc(msgs, True, True)
 
 METHODS = [
     ('RAW',            method_raw,                            False),

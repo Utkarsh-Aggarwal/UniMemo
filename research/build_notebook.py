@@ -183,15 +183,15 @@ def method_llm_sim(msgs, ratio=0.3):
     return out
 
 # -- TSGC Family -----------------------------------------------
-def _tsgc_base_ratio(pos, n, r_recent=0.15, r_mid=0.35, r_floor=0.25):
+def _tsgc_base_ratio(pos, n, r_recent=0.10, r_mid=0.15, r_floor=0.0):
     # FIXED: Relative temporal zone ratio (zones are fractions of conversation length).
-    # Zones: Recent (last 15%): Keep 100%, Mid (next 35%): Keep 50%, Old (first 50%): Keep 25%
-    # Quality floor: 25% minimum ensures no message is entirely obliterated.
+    # Zones: Recent (last 10%): Keep 100%, Mid (next 15%): Keep 30%, Old (first 75%): Keep 0% (unless boosted)
+    # Quality floor: 0% means old messages are dropped entirely unless they earn retention via AG/AT.
     p = n - 1 - pos          # reverse: 0 = oldest, n-1 = most recent
     pct = p / max(n-1, 1)   # normalised 0..1 (0=oldest, 1=most recent)
     if pct >= (1 - r_recent):            return 1.0       # recent zone
-    elif pct >= (1 - r_recent - r_mid):  return 0.50      # mid zone
-    else:                                return r_floor    # old zone (floor = 25%)
+    elif pct >= (1 - r_recent - r_mid):  return 0.30      # mid zone
+    else:                                return r_floor    # old zone (floor = 0%)
 
 def method_tsgc(msgs):
     # TSGC Baseline: pure relative-temporal zone compression.
@@ -200,27 +200,27 @@ def method_tsgc(msgs):
     out = []
     for i, m in enumerate(d):
         ratio = _tsgc_base_ratio(i, n)
+        if ratio < 0.20: continue # Drop messages below 20%
         c = compress_text(m['content'], ratio)
         if c.strip(): out.append({'role':m['role'],'content':c})
     return out
 
 def method_tsgc_ag(msgs):
     # TSGC-AG: Adaptive Gating via novelty + overlap signals.
-    # Novelty gate (+): First-occurrence signal words (decided, rejected, chosen) get boosted.
-    # Overlap penalty (-): Redundant messages (repeating prior words) get reduced retention.
     d = dedup(msgs)
     n = len(d)
     seen_sig, prev_words, out = set(), set(), []
     for i, m in enumerate(d):
         base  = _tsgc_base_ratio(i, n)
-        words = set(re.findall(r'\\\\w+', m['content'].lower()))
+        words = set(re.findall(r'\\w+', m['content'].lower()))
         new_sig = words & SIGNAL_WORDS - seen_sig
         novelty = min(len(new_sig) / 5, 1.0)
         overlap = len(words & prev_words) / max(len(words | prev_words), 1)
-        gate    = base + 0.40*novelty - 0.20*overlap
-        ratio   = max(0.25, min(1.0, gate))
+        gate    = base + 0.60*novelty - 0.20*overlap
+        ratio   = max(0.0, min(1.0, gate))
         seen_sig |= new_sig
         prev_words = words
+        if ratio < 0.15: continue
         c = compress_text(m['content'], ratio)
         if c.strip(): out.append({'role':m['role'],'content':c})
     return out
@@ -245,8 +245,9 @@ def method_tsgc_at(msgs):
     out = []
     for i, m in enumerate(d):
         base  = _tsgc_base_ratio(i, n)
-        boost = attn_norm[i] * 0.60   # high-attention msgs get boosted ratio
+        boost = attn_norm[i] * 0.90
         ratio = min(1.0, base + boost)
+        if ratio < 0.30: continue # Drop messages completely if ratio < 30%
         c = compress_text(m['content'], ratio)
         if c.strip(): out.append({'role':m['role'],'content':c})
     return out

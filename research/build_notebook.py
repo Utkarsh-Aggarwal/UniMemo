@@ -428,15 +428,15 @@ def method_csgc(msgs, target_kb=None):
 METHODS = [
     ('RAW',               method_raw,                                            False),
     ('TF-IDF',            lambda m: method_tfidf(m, 0.5),                        False),
-    ('CSGC (Base)',       lambda m: CSGCMemory(target_kb=20).compress(m, 'baseline'), True),
-    ('CSGC (+Topic)',     lambda m: CSGCMemory(target_kb=20).compress(m, 'topic'), True),
-    ('CSGC (+State)',     lambda m: CSGCMemory(target_kb=20).compress(m, 'state'), True),
-    ('CSGC (+Graph)',     lambda m: CSGCMemory(target_kb=20).compress(m, 'graph'), True),
-    ('CSGC (+Import)',    lambda m: CSGCMemory(target_kb=20).compress(m, 'importance'), True),
-    ('CSGC (+Cover)',     lambda m: CSGCMemory(target_kb=20).compress(m, 'coverage'), True),
-    ('CSGC (Full 10KB)',  lambda m: CSGCMemory(target_kb=10).compress(m, 'full'), True),
-    ('CSGC (Full 20KB)',  lambda m: CSGCMemory(target_kb=20).compress(m, 'full'), True),
-    ('CSGC (Full 50KB)',  lambda m: CSGCMemory(target_kb=50).compress(m, 'full'), True),
+    ('CSGC (Base)',       lambda m: CSGCMemory(target_kb=4).compress(m, 'baseline'), True),
+    ('CSGC (+Topic)',     lambda m: CSGCMemory(target_kb=4).compress(m, 'topic'), True),
+    ('CSGC (+State)',     lambda m: CSGCMemory(target_kb=4).compress(m, 'state'), True),
+    ('CSGC (+Graph)',     lambda m: CSGCMemory(target_kb=4).compress(m, 'graph'), True),
+    ('CSGC (+Import)',    lambda m: CSGCMemory(target_kb=4).compress(m, 'importance'), True),
+    ('CSGC (+Cover)',     lambda m: CSGCMemory(target_kb=4).compress(m, 'coverage'), True),
+    ('CSGC (Full 2KB)',   lambda m: CSGCMemory(target_kb=2).compress(m, 'full'), True),
+    ('CSGC (Full 3KB)',   lambda m: CSGCMemory(target_kb=3).compress(m, 'full'), True),
+    ('CSGC (Full 4KB)',   lambda m: CSGCMemory(target_kb=4).compress(m, 'full'), True),
 ]
 print(f"\\u2705 {len(METHODS)} methods defined.")"""))
 
@@ -604,11 +604,11 @@ cells.append(make_code("""fig, ax = plt.subplots(figsize=(9, 6))
 COLORS = {
     'RAW':'#95a5a6','Sliding Window':'#7f8c8d','Lead+Tail':'#bdc3c7',
     'TF-IDF':'#e67e22','LLM-Sim':'#c0392b',
-    'CSGC (Full 10KB)':'#8e44ad',
-    'CSGC (Full 20KB)':'#27ae60','CSGC (Full 50KB)':'#1abc9c'
+    'CSGC (Full 2KB)':'#8e44ad',
+    'CSGC (Full 3KB)':'#27ae60','CSGC (Full 4KB)':'#1abc9c'
 }
-SIZES = {'CSGC (Full 10KB)':260,'CSGC (Full 20KB)':300,'CSGC (Full 50KB)':340}
-MARKERS = {'CSGC (Full 10KB)':'s','CSGC (Full 20KB)':'*','CSGC (Full 50KB)':'P'}
+SIZES = {'CSGC (Full 2KB)':260,'CSGC (Full 3KB)':300,'CSGC (Full 4KB)':340}
+MARKERS = {'CSGC (Full 2KB)':'s','CSGC (Full 3KB)':'*','CSGC (Full 4KB)':'P'}
 
 for method in ORDER:
     row  = AGG.loc[method]
@@ -712,7 +712,7 @@ print("Saved fig3_claim3_pivot.pdf")"""))
 cells.append(make_md("""### Figure 4 — Ablation Study
 *Measures the incremental value of TSGC components, separated by Quality and Efficiency.*"""))
 
-cells.append(make_code("""csgc_variants = ['CSGC (Base)', 'CSGC (+Topic)', 'CSGC (+State)', 'CSGC (+Graph)', 'CSGC (+Import)', 'CSGC (+Cover)', 'CSGC (Full 20KB)']
+cells.append(make_code("""csgc_variants = ['CSGC (Base)', 'CSGC (+Topic)', 'CSGC (+State)', 'CSGC (+Graph)', 'CSGC (+Import)', 'CSGC (+Cover)', 'CSGC (Full 4KB)']
 quality_metrics = ['QA Accuracy %','Pivot Recall %','Gold Memory %','Recency %']
 efficiency_metrics = ['Storage Saved %']
 

@@ -340,10 +340,8 @@ class CSGCMemory:
                 dep_cov = G.subgraph(S).number_of_edges() / max(1, G.number_of_edges())
                 redundancy = 0
                 if len(S) > 1:
-                    sel_embs = np.array([state_nodes[x]['emb'] for x in S])
-                    sims = cosine_similarity(sel_embs)
-                    np.fill_diagonal(sims, 0)
-                    redundancy = sims.sum() / (len(S) * (len(S)-1))
+                    sub_sim = sim_matrix[np.ix_(S, S)]
+                    redundancy = sub_sim.sum() / (len(S) * (len(S)-1))
                 val_importance = sum(base_importance[x] for x in S)
                 return val_importance + 0.5 * topic_cov + 0.3 * state_cov + 0.2 * dep_cov - 0.2 * redundancy
                 

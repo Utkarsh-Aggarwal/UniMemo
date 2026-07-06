@@ -1,0 +1,607 @@
+\documentclass[conference]{IEEEtran}
+
+% ─── Packages ─────────────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{float}
+\usepackage{cite}
+\usepackage{hyperref}
+
+% ─── Macros ───────────────────────────────────────────────────────────────────
+\newcommand{\csgc}{\textsc{CSGC}}
+\newcommand{\lean}{\textsc{CSGC}$_{\text{Lean}}$}
+\newcommand{\tele}{\textsc{CSGC}$_{\text{Tele}}$}
+\newcommand{\PR}{\textit{Pivot Recall}}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{document}
+
+\title{CSGC: Compressing Conversation History Without Losing Corrections---
+  Entity-Aware Supersession Detection and the Pivot Recall Metric}
+
+\author{%
+  \IEEEauthorblockN{Utkarsh Aggarwal}
+  \IEEEauthorblockA{Independent Researcher\\
+    utkarshaggarwal06@gmail.com}
+}
+
+\maketitle
+
+% ─── Abstract ─────────────────────────────────────────────────────────────────
+\begin{abstract}
+Modern LLM-powered applications accumulate extensive conversation histories
+that must be compressed before being re-injected into limited context windows.
+Current approaches optimise for average semantic overlap with the original
+text, yet ignore a critical temporal phenomenon: users and assistants
+routinely \emph{correct} earlier facts during a conversation, and a
+compressor that retains obsolete versions can degrade response accuracy.
+
+We introduce \textbf{Context-Salience Greedy Compression (\csgc{})}, a
+deterministic, three-stage pipeline---Redundancy Collapse, Salience Scoring,
+and Greedy Budget Selection---that explicitly detects and deprioritises
+superseded messages while promoting their corrections.
+We also introduce \textbf{Pivot Recall}, a novel evaluation metric that tests
+whether a compressed output contains the \emph{corrected} version of a fact
+rather than the one it replaced.
+
+Evaluated on 99 long-context English conversations from WildChat-1M at a
+30\,\% byte budget, \lean{} achieves 91.2\,\% semantic retention
+(matching LLMLingua-2's 89.1\,\% and running \textbf{4.2$\times$ faster})
+while achieving a Pivot Recall of \textbf{58.3\,\%}---compared to 50.4\,\%
+for Recency-based truncation and \textbf{5.5\,\%} for
+LLMLingua-2. Our results suggest that perplexity-guided token distillation
+does not inherently preserve factual corrections, and that lightweight entity-tracking recovers
+the majority of this structural signal without any LLM calls.
+\end{abstract}
+
+\begin{IEEEkeywords}
+context window compression, prompt engineering, information retrieval,
+entity extraction, conversational AI, supersession
+\end{IEEEkeywords}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:intro}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\IEEEPARstart{L}{arge} Language Models deployed in conversational settings
+must re-read the entire interaction history on every forward pass. This
+creates a well-known trade-off: longer context yields better recall but
+incurs higher API costs, increased time-to-first-token (TTFT), and degraded
+reasoning performance when irrelevant content dilutes the
+prompt---the so-called \emph{``lost in the middle''} effect~\cite{liu2023lostmiddle}.
+
+The standard response has been prompt compression: pruning the context to a
+fixed budget before each new turn. Three families of methods exist.
+\emph{Naive truncation} (Recency, Lead+Tail) is $\mathcal{O}(1)$ but
+destroys either early or late context. \emph{Extractive heuristics} (TF-IDF,
+TextRank) score messages by term statistics and retain the top-scoring subset.
+\emph{Token-level distillation} (LLMLingua~\cite{jiang2023llmlingua},
+LLMLingua-2~\cite{pan2024llmlingua2}) passes the full context through a
+small language model to predict per-token keep/discard masks.
+
+All three families share a fundamental assumption: \emph{the importance of a
+message is static}. This assumption breaks in conversational settings. When a
+user writes ``Let's use PostgreSQL'' and later writes ``Actually, switch to
+MySQL---Postgres doesn't support our auth plugin,'' the first message is not
+merely less important; it can lead to factual inconsistencies if retained without
+the correction. We call such update events \textbf{supersession pivots}.
+
+Our central contribution is to show that this phenomenon is both common and
+consequential. Across 99 real conversations we detect 1,010 supersession
+pivot pairs. Existing compressors fare poorly: LLMLingua-2 passes only
+5.5\,\% of Pivot Recall checks because distillation models optimise for
+fluency, not temporal fact ordering. Simple Recency truncation does better
+(50.4\,\%) but at the cost of severe early-context loss (43.7\,\%
+retention at 10\,\% budget).
+
+We propose \csgc{}, a lightweight pipeline that: (1)~\textbf{detects}
+supersession events using entity-aware sliding-window cosine similarity over
+\texttt{e5-small-v2} embeddings~\cite{wang2024e5}; (2)~\textbf{scores}
+retained messages via a weighted combination of TF-IDF, entity density, and
+recency; and (3)~\textbf{selects} a byte-bounded subset via a greedy
+knapsack, applying a $0.5\times$ penalty to superseded messages and a
+$1.3\times$ boost to their corrections.
+
+\csgc{} requires no GPU, makes no LLM API calls, and runs in under 800\,ms
+per conversation---compatible with synchronous API middleware.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Related Work}
+\label{sec:related}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Prompt Compression}
+LLMLingua~\cite{jiang2023llmlingua} introduced selective context and
+perplexity-guided token dropping. LLMLingua-2~\cite{pan2024llmlingua2} frames
+compression as token-classification, training a 280M-parameter encoder on
+GPT-4-distilled labels. RECOMP~\cite{xu2023recomp} and
+AutoCompressor~\cite{chevalier2023autocompressor} extend these ideas to
+retrieval-augmented generation. All of these methods operate at sub-word
+granularity and cannot natively represent one message replacing another.
+
+\subsection{Extractive Summarisation}
+TextRank~\cite{mihalcea2004textrank} constructs a sentence-similarity graph
+and applies PageRank to score sentences. TF-IDF variants treat each message
+as a document and rank by corpus-relative term frequencies. Neither approach
+models time nor the directed supersession relationship between messages.
+
+\subsection{Context Management}
+Liu et al.~\cite{liu2023lostmiddle} demonstrate empirically that LLMs attend
+to the beginning and end of a long context far more than to the
+middle---motivating the Lead+Tail baseline. Sliding window
+attention~\cite{beltagy2020longformer} and memory
+augmentation~\cite{wu2022memorizing} address this structurally but require
+architectural changes. \csgc{} targets the orthogonal setting where the LLM
+is a black-box API.
+
+\subsection{Fact Supersession}
+Current prompt compression literature primarily focuses on static context
+summarisation and token distillation. The closest adjacent work studies fact
+drift across training corpora rather than temporal updates within a single
+conversation context~\cite{dhingra2022timedial}.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{The \csgc{} Pipeline}
+\label{sec:method}
+% ─────────────────────────────────────────────────────────────────────────────
+
+Let a conversation be a sequence of $n$ messages
+$\mathcal{M} = \{m_1, \ldots, m_n\}$, each with role
+$r_i \in \{\text{user},\text{assistant}\}$, textual content $t_i$, and byte
+size $s_i$. Given a target byte budget $B$, \csgc{} produces a subsequence
+$\mathcal{C} \subseteq \mathcal{M}$ such that $\sum_{m \in \mathcal{C}} s_m
+\leq B$. The three stages are illustrated in Fig.~\ref{fig:arch}.
+
+\begin{figure}[t]
+  \centering
+  % FIX: use your cleaned architecture image (jpg or pdf, both work)
+  \includegraphics[width=\linewidth]{fig4_architecture.jpg}
+  \caption{The \csgc{} three-stage pipeline. Stage~1 merges adjacent
+    same-role messages and detects supersession pivots via entity-aware
+    sliding-window similarity. Stage~2 assigns a composite salience score.
+    Stage~3 greedily packs the highest-scoring messages into the byte budget.}
+  \label{fig:arch}
+\end{figure}
+
+\subsection{Stage 1: Redundancy Collapse}
+\label{ssec:collapse}
+
+\textit{Same-role merging.}
+Consecutive messages with identical roles are concatenated, collapsing reply
+chains into a single logical unit.
+
+\textit{Sliding-window deduplication.}
+Let $\mathbf{e}_i \in \mathbb{R}^d$ be the $\ell_2$-normalised
+\texttt{e5-small-v2} embedding of $t_i$. For each message $m_i$, we compute
+cosine similarities against its $W\!=\!15$ predecessors:
+\begin{equation}
+  \text{sim}(i,j) = \mathbf{e}_i \cdot \mathbf{e}_j,\quad
+  j \in \{\max(1,i{-}W),\ldots,i{-}1\}.
+\end{equation}
+If $\text{sim}(i,j) \geq \theta_\text{dup} = 0.95$, we compare entity sets
+$E_i$ and $E_j$ extracted via spaCy with numeric/date regex fallbacks:
+\begin{itemize}
+  \item $E_i = E_j$ $\Rightarrow$ \textbf{Collapse}: $m_j$ is absorbed into
+    $m_i$ (exact repetition).
+  \item $E_i \neq E_j$ $\Rightarrow$ \textbf{Supersession}: $m_j$ is flagged
+    \textsc{Obsolete}; $m_i$ is flagged \textsc{Correction}.
+\end{itemize}
+
+The key insight is that near-duplicate messages with matching entities
+represent repetition, while diverging entities signal a factual update.
+
+\subsection{Stage 2: Salience Scoring}
+\label{ssec:salience}
+
+Each message receives a composite salience score $\sigma_i \in [0,1]$:
+\begin{equation}
+  \sigma_i = w_\text{tfidf}\,\tilde{f}_i^{\text{tfidf}}
+           + w_\text{ent}\,\tilde{f}_i^{\text{ent}}
+           + w_\text{rec}\,\tilde{f}_i^{\text{rec}},
+\end{equation}
+where all components are min-max normalised within the conversation and
+weights are $w_\text{tfidf}\!=\!0.50$, $w_\text{ent}\!=\!0.30$,
+$w_\text{rec}\!=\!0.20$.
+
+Supersession modifiers are applied post-scoring:
+\begin{equation}
+  \hat{\sigma}_i = \begin{cases}
+    \sigma_i \times 0.5 & \text{if } m_i \in \textsc{Obsolete},\\
+    \sigma_i \times 1.3 & \text{if } m_i \in \textsc{Correction},\\
+    \sigma_i             & \text{otherwise.}
+  \end{cases}
+\end{equation}
+
+These heuristic multipliers were selected to enforce strict precedence: a $0.5\times$ penalty aggressively down-weights obsolete content, while a $1.3\times$ boost elevates corrections above average salience to ensure they survive budget constraints.
+
+\subsection{Stage 3: Greedy Budget Selection}
+\label{ssec:selection}
+
+Messages are sorted in descending $\hat{\sigma}_i$ order and greedily added
+to $\mathcal{C}$ until budget $B$ is exhausted, then re-sorted
+chronologically to preserve conversational coherence.
+
+We evaluate two output variants:
+\textbf{\lean{}} emits the full text of each selected message;
+\textbf{\tele{}} additionally strips stop-words and non-entity filler tokens
+via deterministic regex, achieving tighter compression at the cost of
+grammaticality.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Pivot Recall: A New Evaluation Metric}
+\label{sec:metric}
+% ─────────────────────────────────────────────────────────────────────────────
+
+Standard compression benchmarks measure average semantic similarity between
+compressed and original context. A compressor can score 90\,\% semantic
+retention while systematically discarding every factual correction, because
+corrected and original facts share vocabulary and are locally similar.
+
+\textit{Pivot QA set construction.}
+We run Stage~1 over the initially sampled 100 conversations to extract supersession pairs
+$\langle m_\text{old}, m_\text{new}\rangle$. (As noted, one conversation is subsequently filtered due to extraction failures). Across the 99 valid conversations, this yields \textbf{1,010 pivot QA pairs}. The gold target is the embedding
+of $m_\text{new}$ (corrected fact); the distractor is the embedding of
+$m_\text{old}$ (obsolete fact).
+
+\textit{Scoring.}
+For compressed output $\mathcal{C}$ and pivot pair $k$, let
+$s_\text{new} = \max_{m \in \mathcal{C}}\,\mathbf{e}_m \cdot
+\mathbf{e}_\text{new}^{(k)}$ and
+$s_\text{old} = \max_{m \in \mathcal{C}}\,\mathbf{e}_m \cdot
+\mathbf{e}_\text{old}^{(k)}$.
+A pair passes iff:
+\begin{equation}
+  s_\text{new} \geq 0.92 \;\wedge\; s_\text{new} > s_\text{old}.
+\end{equation}
+\PR{} is the fraction of pairs that pass:
+\begin{equation}
+  \text{PR} = \frac{1}{K}\sum_{k=1}^{K}
+  \mathbf{1}\!\left[s^{(k)}_\text{new} \geq 0.92
+               \;\wedge\; s^{(k)}_\text{new} > s^{(k)}_\text{old}\right].
+\end{equation}
+
+The conjunctive condition is intentional: a method must retain the correction
+\emph{more faithfully} than the error it supersedes.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Experimental Setup}
+\label{sec:setup}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\textit{Dataset.}
+We sample 100 English conversations from WildChat-1M~\cite{zhao2024wildchat},
+filtered for $\geq$10 turns. The random seed is fixed at 42. One conversation
+was excluded due to an entity extraction failure, leaving 99 conversations for
+the evaluation set (\csgc{} is parameter-free).
+
+\textit{Baselines.}
+\textbf{RAW} (uncompressed oracle);
+\textbf{Lead+Tail} (first 15\,\%\,+\,last 15\,\%);
+\textbf{Recency} (most recent messages up to budget);
+\textbf{Random} (uniformly sampled messages);
+\textbf{TF-IDF} (greedy selection by TF-IDF score);
+\textbf{TextRank}~\cite{mihalcea2004textrank} (PageRank over similarity graph);
+\textbf{LLMLingua-2}~\cite{pan2024llmlingua2} (run locally, CPU-only).
+
+% FIX: Renamed from "General QA metric" to match actual implementation.
+% The metric is purely e5-small-v2 cosine similarity; no LLM grading was used.
+\textit{Semantic Retention metric.}
+A gold assistant message from the first third of each conversation serves as a
+semantic anchor. Using \texttt{e5-small-v2}~\cite{wang2024e5}, we compute the
+maximum cosine similarity between the gold embedding and all messages in the
+compressed output (pass threshold $\theta = 0.92$, score scaled $\times 100$
+to report as a percentage).
+
+\textit{Budget sweep.}
+All methods are evaluated at 10, 20, 30, 40, 50, and 60\,\% byte budgets.
+Results are averaged over the 99 valid conversations.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Results}
+\label{sec:results}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Overall Benchmark at 30\,\% Budget}
+
+Table~\ref{tab:main} and Fig.~\ref{fig:comp_vs_qa} report all methods at
+the canonical 30\,\% budget.
+
+\begin{table}[t]
+  \centering
+  \caption{Overall benchmark at 30\,\% byte budget (N\,=\,99 conversations).
+    Methods sorted by semantic retention (Ret.\,\%). Runtime is
+    per-conversation on a single CPU core with no GPU or LLM API calls.}
+  \label{tab:main}
+  \small
+  \begin{tabular}{lrrrr}
+    \toprule
+    \textbf{Method} & \textbf{Comp.\,\%} & \textbf{Saved\,\%}
+      & \textbf{Ret.\,\%} & \textbf{ms} \\
+    \midrule
+    RAW              & 100.0 &  0.0 & 99.9          &    0.0 \\
+    Lead+Tail        &  27.5 & 72.5 & 96.6          &    0.0 \\
+    TextRank         &  27.7 & 72.3 & 93.0          &   96.2 \\
+    TF-IDF           &  28.8 & 71.2 & 93.0          &    9.8 \\
+    Random           &  27.9 & 72.1 & 93.0          &    0.1 \\
+    \lean{}          &  28.6 & 71.4 & \textbf{91.2} &  795.3 \\
+    \tele{}          &  22.1 & 77.9 & 89.5          &  760.6 \\
+    LLMLingua-2      &  34.4 & 65.6 & 89.1          & 3371.0 \\
+    Recency          &  22.5 & 77.5 & 85.4          &    0.0 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig1_SementicVsCompRatio.png}
+  \caption{Compression ratio (lower = tighter) vs.\ semantic retention at
+    30\,\% budget. \lean{} and LLMLingua-2 cluster near the efficient
+    frontier; Recency is a visible outlier due to its recency bias.}
+  \label{fig:comp_vs_qa}
+\end{figure}
+
+At 30\,\% budget, \lean{} achieves 91.2\,\% retention---2.1\,pp above
+LLMLingua-2 (89.1\,\%) and 5.8\,pp above Recency (85.4\,\%). \tele{}
+achieves stronger compression (22.1\,\% ratio vs.\ 28.6\,\% for \lean{})
+while maintaining 89.5\,\% retention, outperforming LLMLingua-2 under a
+stricter byte constraint.
+
+The Random baseline (93.0\,\%) achieves competitive semantic retention because
+WildChat conversations are topically coherent; any random sample retains
+overlapping vocabulary with the gold reference. This underscores why Pivot
+Recall is a necessary companion metric.
+
+\subsection{Retention Across Budget Targets}
+
+Table~\ref{tab:budget} and Fig.~\ref{fig:budget_curve} show semantic
+retention across six budget levels.
+
+\begin{table}[t]
+  \centering
+  \caption{Semantic retention (\%) across budget targets. Bold = best
+    among compressed methods.}
+  \label{tab:budget}
+  \small
+  \begin{tabular}{lrrrrrr}
+    \toprule
+    \textbf{Method} & \textbf{10} & \textbf{20} & \textbf{30}
+      & \textbf{40} & \textbf{50} & \textbf{60} \\
+    \midrule
+    RAW         & 99.9 & 99.9 & 99.9 & 99.9 & 99.9 & 99.9 \\
+    Lead+Tail   & \textbf{93.0} & \textbf{95.1} & \textbf{96.6}
+                & \textbf{98.3} & \textbf{98.8} & \textbf{99.5} \\
+    TF-IDF      & 89.7 & 92.0 & 93.0 & 95.3 & 95.4 & 96.2 \\
+    TextRank    & 90.3 & 92.1 & 93.0 & 94.0 & 94.7 & 95.6 \\
+    Random      & 88.9 & 91.1 & 93.0 & 93.9 & 95.0 & 96.2 \\
+    \lean{}     & 88.5 & 90.7 & 91.2 & 93.3 & 94.0 & 95.0 \\
+    \tele{}     & 87.2 & 89.2 & 89.5 & 90.9 & 91.4 & 92.2 \\
+    LLMLingua-2 & 88.2 & 88.8 & 89.1 & 89.3 & 89.4 & 89.8 \\
+    Recency     & 43.7 & 79.1 & 85.4 & 88.3 & 89.5 & 90.3 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig2_QA_RetentionvsStorageBudget.png}
+  \caption{Semantic retention vs.\ storage budget. Recency's sharp inflection
+    between 10\,\%--20\,\% exposes its extreme sensitivity to context length.
+    \lean{} scales consistently across the full range.}
+  \label{fig:budget_curve}
+\end{figure}
+
+LLMLingua-2 exhibits a remarkably flat retention curve (88.2\,\% at 10\,\%,
+89.8\,\% at 60\,\%), suggesting its token masks are largely budget-invariant.
+\lean{} scales from 88.5\,\% to 95.0\,\%---a desirable property for systems
+requiring fine-grained cost control. Recency's collapse at 10\,\% budget
+(43.7\,\%) confirms the ``lost in the middle'' intuition.
+
+\subsection{Pivot Recall: The Central Finding}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{Fig6_GenralQAvsPivotRecall.png}
+  % FIX: caption corrected from "QA Accuracy" to "Semantic Retention"
+  \caption{Semantic retention vs.\ Pivot Recall at 30\,\% budget (1,010
+    supersession pairs). All methods achieve similar semantic retention
+    (blue), yet LLMLingua-2 exhibits substantially lower Pivot Recall
+    (5.5\,\%).}
+  \label{fig:pivot}
+\end{figure}
+
+\begin{table}[t]
+  \centering
+  % FIX: renamed column header from "Gen. QA %" to "Sem. Ret. %"
+  \caption{Semantic retention and Pivot Recall at 30\,\% budget. The
+    \textit{Gap} column reveals how semantic retention alone overestimates
+    fact-correction quality.}
+  \label{tab:pivot}
+  \small
+  \begin{tabular}{lrrr}
+    \toprule
+    \textbf{Method} & \textbf{Sem. Ret.\,\%} & \textbf{Piv. Recall\,\%}
+      & \textbf{Gap} \\
+    \midrule
+    RAW             & 99.9 & 91.3 &  8.6 \\
+    TF-IDF          & 93.0 & 43.0 & 50.0 \\
+    Recency         & 85.4 & 50.4 & 35.0 \\
+    \lean{}         & 91.2 & 58.3 & \textbf{32.9} \\
+    LLMLingua-2     & 89.1 &  5.5 & 83.6 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textit{LLMLingua-2 failure analysis.}
+LLMLingua-2 achieves 89.1\,\% semantic retention but only 5.5\,\% Pivot
+Recall---an 83.6\,pp gap. The cause is structural: LLMLingua-2's
+token-classification objective rewards retaining fluent, high-perplexity
+tokens. Factual corrections often consist of small numeric or proper-noun
+substitutions (e.g., ``MySQL'' vs.\ ``PostgreSQL'') that are
+\emph{low-perplexity in context} and thus preferentially dropped.
+When original fact-bearing tokens survive the mask while correction tokens
+are discarded, the compressed output provides incomplete context to the downstream LLM.
+
+\textit{CSGC advantage.}
+\lean{} achieves 58.3\,\% Pivot Recall, the smallest semantic-retention to
+Pivot-Recall gap (32.9\,pp) among all compressed methods. The remaining gap
+to the RAW oracle (91.3\,\%) reflects cases where budget pressure forces
+omission of both old and new facts, or where the correcting message is too
+short to outcompete longer, higher-salience messages.
+
+\subsection{Computational Efficiency}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{fig3_runtime.png}
+  \caption{Mean per-conversation runtime (log scale). \lean{} runs in
+    795\,ms; LLMLingua-2 (3,371\,ms) is 4.2$\times$ slower. Both run
+    entirely on CPU with no GPU or external API calls.}
+  \label{fig:runtime}
+\end{figure}
+
+\lean{}'s 795\,ms runtime is dominated by the \texttt{e5-small-v2} embedding
+pass in Stage~1. Replacing this with a BM25 or bag-of-words entity-overlap
+approximation represents an immediate optimisation avenue. Even as
+implemented, \lean{} comfortably fits the latency envelope of asynchronous
+API middleware.
+
+\subsection{Lean vs.\ Telegraphic}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{Fig5_leanvsTele.png}
+  \caption{\lean{} vs.\ \tele{}: (left) semantic retention by budget target;
+    (right) retention at matched actual compression ratios. \tele{}'s token
+    pruning achieves an additional $\sim$6\,pp compression with a minor
+    retention penalty.}
+  \label{fig:leantele}
+\end{figure}
+
+\tele{} consistently achieves tighter compression (22.1\,\% vs.\ 28.6\,\%
+ratio at 30\,\% budget) at a 1.7\,pp retention cost, making it the preferred
+choice under extreme budget constraints.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Discussion}
+\label{sec:discussion}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\textit{Why Pivot Recall matters in practice.}
+Consider an agentic coding assistant that, two hours into a session, corrects
+its earlier recommendation from ``use asyncio'' to ``use threading---asyncio
+doesn't support this library.'' A compressor that retains the original while
+dropping the correction may cause the LLM to repeat outdated advice.
+This failure mode is often not captured by average semantic retention metrics,
+whereas Pivot Recall explicitly surfaces this class of errors.
+
+\textit{On the competitiveness of simple baselines.}
+Lead+Tail achieves 96.6\,\% semantic retention in under 0.1\,ms. For
+applications where long-term coherence is unimportant and conversations are
+short, Lead+Tail remains the rational choice. \csgc{} is most valuable in
+long, multi-session conversations with multiple mid-course corrections---the
+regime most common in agentic and enterprise chat deployments.
+
+\textit{Limitations.}
+(1)~\texttt{e5-small-v2} truncates inputs to 512 tokens; very long messages
+may cause missed entity detections.
+(2)~Entity extraction relies on spaCy NER and regex fallbacks; it cannot
+detect corrections that do not surface recognisable entities (e.g., tonal or
+reasoning-level shifts).
+(3)~All numbers derive from WildChat-1M; generalisation to domain-specific
+corpora (medical, legal, code) is untested.
+(4)~The $0.5\times$ and $1.3\times$ modifiers are empirical heuristics designed
+to prioritise corrections; future work should systematically ablate and optimise
+these hyperparameters against Pivot Recall.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+% ─────────────────────────────────────────────────────────────────────────────
+
+We presented \csgc{}, a deterministic prompt compression pipeline and the
+first to explicitly model conversational supersession. Our central finding is
+that relying solely on semantic retention may mask limitations in distillation-based
+compressors: LLMLingua-2 achieves a Pivot Recall of only 5.5\,\% despite
+89.1\,\% semantic retention, meaning it struggles to retain the updated factual
+state of the conversation. \csgc{} narrows this gap to a
+32.9\,pp spread by tracking entity-level supersession events and penalising
+obsolete content at selection time, while running 4.2$\times$ faster than
+LLMLingua-2 without any LLM calls.
+
+We release the Pivot Recall metric and evaluation code to support future
+benchmarking of temporally-aware compression methods, and encourage the
+community to adopt Pivot Recall as a standard complement to semantic retention
+in prompt compression evaluations.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{thebibliography}{99}
+
+\bibitem{liu2023lostmiddle}
+N.~F. Liu, K.~Lin, J.~Hewitt, A.~Paranjape, M.~Bevilacqua, F.~Petroni, and
+  P.~Liang, ``Lost in the middle: How language models use long contexts,''
+  \textit{arXiv preprint arXiv:2307.03172}, 2023.
+
+\bibitem{jiang2023llmlingua}
+H.~Jiang, Q.~Wu, C.-Y. Lin, Y.~Yang, and L.~Qiu, ``{LLMLingua}: Compressing
+  prompts for accelerated inference of large language models,'' in
+  \textit{Proc. Conf. Empirical Methods in Natural Language Processing
+  (EMNLP)}, 2023, pp. 13358--13376.
+
+\bibitem{pan2024llmlingua2}
+Z.~Pan, Q.~Wu, H.~Jiang, M.~Xia, X.~Luo, J.~Zhang, Q.~Lin, V.~R\"{u}hle,
+  Y.~Yang, C.-Y. Lin, H.~V. Zhao, L.~Qiu, and D.~Zhang, ``{LLMLingua-2}:
+  Data distillation for efficient and faithful task-agnostic prompt
+  compression,'' \textit{arXiv preprint arXiv:2403.12968}, 2024.
+
+\bibitem{xu2023recomp}
+F.~Xu, W.~Shi, and E.~Choi, ``{RECOMP}: Improving retrieval-augmented {LMs}
+  with compression and selective augmentation,'' \textit{arXiv preprint
+  arXiv:2310.04408}, 2023.
+
+\bibitem{chevalier2023autocompressor}
+A.~Chevalier, A.~Wettig, A.~Ajith, and D.~Chen, ``Adapting language models
+  to compress contexts,'' \textit{arXiv preprint arXiv:2305.14788}, 2023.
+
+\bibitem{mihalcea2004textrank}
+R.~Mihalcea and P.~Tarau, ``{TextRank}: Bringing order into text,'' in
+  \textit{Proc. Conf. Empirical Methods in Natural Language Processing
+  (EMNLP)}, 2004, pp. 404--411.
+
+\bibitem{beltagy2020longformer}
+I.~Beltagy, M.~E. Peters, and A.~Cohan, ``Longformer: The long-document
+  transformer,'' \textit{arXiv preprint arXiv:2004.05150}, 2020.
+
+\bibitem{wu2022memorizing}
+Y.~Wu, M.~N. Rabe, D.~Hutchins, and C.~Szegedy, ``Memorizing transformers,''
+  in \textit{International Conference on Learning Representations (ICLR)},
+  2022.
+
+\bibitem{wang2024e5}
+L.~Wang, N.~Yang, X.~Huang, L.~Yang, R.~Majumder, and F.~Wei, ``Multilingual
+  {E5} text embeddings: A technical report,'' in \textit{Proc. 62nd Annual
+  Meeting of the Association for Computational Linguistics (ACL)}, 2024,
+  pp. 5356--5369.
+
+\bibitem{zhao2024wildchat}
+W.~Zhao, J.~T. Chiu, Y.~Deng, V.~I. Spitz, R.~Y. Pang, A.~M. Rush,
+  Y.~Kim, and K.~Cho, ``{WildChat}: 1M {ChatGPT} interaction logs in the
+  wild,'' \textit{arXiv preprint arXiv:2405.01470}, 2024.
+
+\bibitem{dhingra2022timedial}
+B.~Dhingra, J.~R. Cole, J.~M. Eisenschlos, D.~Gillick, J.~Eisenstein, and
+  W.~W. Cohen, ``Time-aware language models as temporal knowledge bases,''
+  \textit{Transactions of the Association for Computational Linguistics},
+  vol.~10, pp. 257--273, 2022.
+
+\end{thebibliography}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\end{document}

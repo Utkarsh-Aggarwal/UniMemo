@@ -1,0 +1,54 @@
+{
+  "manifest_version": 3,
+  "name": "UniMemo — AI Context Bridge",
+  "short_name": "UniMemo",
+  "version": "1.0.0",
+  "description": "Persistent, cross-platform AI memory. Capture conversations from Claude, ChatGPT, or Gemini and carry context anywhere.",
+  "icons": {
+    "16":  "icons/icon-16.png",
+    "48":  "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16":  "icons/icon-16.png",
+      "48":  "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "default_title": "UniMemo"
+  },
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["content/claude-scraper.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["content/chatgpt-scraper.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["content/gemini-scraper.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://claude.ai/*",
+    "https://chatgpt.com/*",
+    "https://gemini.google.com/*"
+  ]
+}

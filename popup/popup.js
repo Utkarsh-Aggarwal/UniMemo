@@ -22,9 +22,10 @@ const messagePreview= document.getElementById('message-preview');
 const panelStep1    = document.getElementById('panel-step1');
 const panelStep2    = document.getElementById('panel-step2');
 // Compression stats
-const compressionBar   = document.getElementById('compression-bar');
-const compressSavings  = document.getElementById('compress-savings');
-const compressZones    = document.getElementById('compress-zones');
+const compressionBar     = document.getElementById('compression-bar');
+const compressSavings    = document.getElementById('compress-savings');
+const compressObsolete   = document.getElementById('compress-obsolete');
+const compressCorrection = document.getElementById('compress-correction');
 // Buttons
 const btnCapture    = document.getElementById('btn-capture');
 const btnCopy       = document.getElementById('btn-copy');
@@ -144,14 +145,17 @@ async function renderContext(ctx) {
   // Status
   setStatus('active', `Context from ${ctx.platform} ready`);
 
-  // Compression stats
+  // CSGC compression stats
   const metaRes = await bgMessage({ type: 'GET_COMPRESSION_META' });
   if (metaRes?.meta) {
-    const m = metaRes.meta;
+    const m   = metaRes.meta;
     const pct = Math.round(m.overallRatio * 100);
-    compressSavings.textContent = `${pct}% saved`;
-    compressZones.textContent   =
-      `Z1:${m.zones.verbatim} Z2:${m.zones.pruned} Z3:${m.zones.summary}`;
+    compressSavings.textContent    = `${pct}% saved`;
+    compressObsolete.textContent   = `⬇${m.obsoleteCount ?? 0} obsolete`;
+    compressCorrection.textContent = `⬆${m.correctionCount ?? 0} corrections`;
+    // Highlight if any supersession pivots were found
+    compressObsolete.style.opacity   = m.obsoleteCount   > 0 ? '1' : '0.45';
+    compressCorrection.style.opacity = m.correctionCount > 0 ? '1' : '0.45';
     compressionBar.hidden = false;
   } else {
     compressionBar.hidden = true;

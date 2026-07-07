@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy — UniMemo</title>
+  <meta name="description" content="UniMemo privacy policy. UniMemo is a Chrome extension that transfers AI conversation context across platforms. No data is collected or transmitted." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0b0d12;
+      --bg-card:     #12151c;
+      --bg-elevated: #191d27;
+      --border:      rgba(255,255,255,0.07);
+      --text:        #e8eaf0;
+      --text-muted:  #7a7f96;
+      --text-dim:    #4a4f66;
+      --accent:      #7c6fe0;
+      --accent-soft: rgba(124,111,224,0.12);
+      --green:       #22c55e;
+      --green-soft:  rgba(34,197,94,0.10);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      min-height: 100vh;
+      padding: 0;
+    }
+
+    /* ── Nav ─────────────────────────────────────────── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(11,13,18,0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+    }
+    .nav-inner {
+      max-width: 760px;
+      margin: 0 auto;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      color: var(--text);
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: -0.3px;
+    }
+    .nav-logo-icon {
+      width: 28px;
+      height: 28px;
+      background: var(--accent-soft);
+      border: 1px solid rgba(124,111,224,0.25);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+    .nav-badge {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 2px 10px;
+    }
+
+    /* ── Hero ────────────────────────────────────────── */
+    .hero {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 64px 24px 40px;
+    }
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--accent);
+      background: var(--accent-soft);
+      border: 1px solid rgba(124,111,224,0.2);
+      border-radius: 20px;
+      padding: 4px 12px;
+      margin-bottom: 20px;
+    }
+    .hero h1 {
+      font-size: clamp(28px, 5vw, 40px);
+      font-weight: 700;
+      letter-spacing: -0.8px;
+      line-height: 1.15;
+      margin-bottom: 14px;
+    }
+    .hero p {
+      font-size: 16px;
+      color: var(--text-muted);
+      max-width: 560px;
+      margin-bottom: 28px;
+    }
+    .hero-meta {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .meta-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .meta-dot {
+      width: 6px;
+      height: 6px;
+      background: var(--green);
+      border-radius: 50%;
+      box-shadow: 0 0 6px var(--green);
+    }
+
+    /* ── TL;DR card ──────────────────────────────────── */
+    .tldr-card {
+      max-width: 760px;
+      margin: 0 auto 0;
+      padding: 0 24px 40px;
+    }
+    .tldr-inner {
+      background: var(--green-soft);
+      border: 1px solid rgba(34,197,94,0.2);
+      border-radius: 14px;
+      padding: 20px 24px;
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+    }
+    .tldr-icon { font-size: 20px; flex-shrink: 0; margin-top: 1px; }
+    .tldr-text h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--green);
+      margin-bottom: 4px;
+    }
+    .tldr-text p { font-size: 14px; color: var(--text-muted); line-height: 1.6; }
+
+    /* ── Main content ────────────────────────────────── */
+    .content {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 0 24px 80px;
+    }
+
+    .section {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px 28px;
+      margin-bottom: 16px;
+      transition: border-color 0.2s;
+    }
+    .section:hover { border-color: rgba(255,255,255,0.12); }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .section-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+    }
+    .section h2 {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: -0.2px;
+    }
+
+    .section p {
+      font-size: 14px;
+      color: var(--text-muted);
+      line-height: 1.7;
+      margin-bottom: 12px;
+    }
+    .section p:last-child { margin-bottom: 0; }
+
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+    .data-table th {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-dim);
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .data-table td {
+      font-size: 13px;
+      color: var(--text-muted);
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      vertical-align: top;
+    }
+    .data-table tr:last-child td { border-bottom: none; }
+    .data-table td:first-child { font-weight: 500; color: var(--text); width: 38%; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+    .pill-no {
+      background: rgba(239,68,68,0.10);
+      color: #f87171;
+      border: 1px solid rgba(239,68,68,0.2);
+    }
+    .pill-yes {
+      background: var(--green-soft);
+      color: var(--green);
+      border: 1px solid rgba(34,197,94,0.2);
+    }
+    .pill-local {
+      background: var(--accent-soft);
+      color: #a78bfa;
+      border: 1px solid rgba(124,111,224,0.2);
+    }
+
+    .permission-list {
+      list-style: none;
+      margin-top: 8px;
+    }
+    .permission-list li {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      font-size: 13px;
+    }
+    .permission-list li:last-child { border-bottom: none; }
+    .perm-name {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 12px;
+      font-weight: 600;
+      color: #a78bfa;
+      background: var(--accent-soft);
+      border: 1px solid rgba(124,111,224,0.15);
+      border-radius: 6px;
+      padding: 2px 8px;
+      flex-shrink: 0;
+      white-space: nowrap;
+      margin-top: 1px;
+    }
+    .perm-desc { color: var(--text-muted); line-height: 1.6; }
+
+    /* ── Footer ──────────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 28px 24px;
+      text-align: center;
+    }
+    .footer-inner {
+      max-width: 760px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .footer-logo {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .footer-sub {
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+    .footer-contact {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .footer-contact a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .footer-contact a:hover { text-decoration: underline; }
+
+    @media (max-width: 600px) {
+      .nav-inner { padding: 0; }
+      .section { padding: 20px 18px; }
+      .hero { padding: 48px 16px 32px; }
+      .tldr-card, .content { padding-left: 16px; padding-right: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav>
+    <div class="nav-inner">
+      <a class="nav-logo" href="#">
+        <div class="nav-logo-icon">🔗</div>
+        UniMemo
+      </a>
+      <span class="nav-badge">Privacy Policy</span>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <div class="hero">
+    <div class="hero-eyebrow">🔒 Legal</div>
+    <h1>Privacy Policy</h1>
+    <p>
+      UniMemo is built on a simple principle: your conversations are yours.
+      We never collect, transmit, or store your data anywhere outside your own browser.
+    </p>
+    <div class="hero-meta">
+      <div class="meta-item">
+        <div class="meta-dot"></div>
+        Effective: July 2026
+      </div>
+      <div class="meta-item">
+        <div class="meta-dot"></div>
+        No data collection
+      </div>
+      <div class="meta-item">
+        <div class="meta-dot"></div>
+        No external servers
+      </div>
+    </div>
+  </div>
+
+  <!-- TL;DR -->
+  <div class="tldr-card">
+    <div class="tldr-inner">
+      <div class="tldr-icon">✅</div>
+      <div class="tldr-text">
+        <h3>TL;DR — The short version</h3>
+        <p>
+          UniMemo reads conversation text from AI platforms only when you explicitly click
+          Capture. That text is stored only in your browser's local storage.
+          Nothing is sent to any server. Nothing is sold. Nothing leaves your device.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="content">
+
+    <!-- What we collect -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">📋</div>
+        <h2>What UniMemo Accesses</h2>
+      </div>
+      <p>
+        UniMemo accesses one type of data, and only when you initiate it:
+      </p>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Data</th>
+            <th>When</th>
+            <th>Stored where</th>
+            <th>Transmitted</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Conversation text from the current AI page</td>
+            <td>Only when you click Capture</td>
+            <td><span class="pill pill-local">Local browser only</span></td>
+            <td><span class="pill pill-no">Never</span></td>
+          </tr>
+          <tr>
+            <td>Active tab URL (for platform detection)</td>
+            <td>Only when you click Capture</td>
+            <td><span class="pill pill-no">Not stored</span></td>
+            <td><span class="pill pill-no">Never</span></td>
+          </tr>
+          <tr>
+            <td>Clipboard (write only)</td>
+            <td>Only when you click "Copy & Switch AI"</td>
+            <td><span class="pill pill-no">Not stored</span></td>
+            <td><span class="pill pill-no">Never</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- What we do NOT collect -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">🚫</div>
+        <h2>What We Do Not Collect</h2>
+      </div>
+      <p>UniMemo does not collect, access, or transmit any of the following:</p>
+      <table class="data-table">
+        <thead>
+          <tr><th>Data type</th><th>Collected</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Name, email, or any personal identity</td><td><span class="pill pill-no">No</span></td></tr>
+          <tr><td>Passwords or authentication credentials</td><td><span class="pill pill-no">No</span></td></tr>
+          <tr><td>Browsing history or visited URLs</td><td><span class="pill pill-no">No</span></td></tr>
+          <tr><td>Analytics, usage events, or click tracking</td><td><span class="pill pill-no">No</span></td></tr>
+          <tr><td>Location or IP address</td><td><span class="pill pill-no">No</span></td></tr>
+          <tr><td>Financial or payment information</td><td><span class="pill pill-no">No</span></td></tr>
+          <tr><td>Health information</td><td><span class="pill pill-no">No</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Local storage -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">💾</div>
+        <h2>Local Storage</h2>
+      </div>
+      <p>
+        Captured conversation context is stored using
+        <code style="font-size:12px;background:var(--bg-elevated);padding:1px 6px;border-radius:4px;border:1px solid var(--border)">chrome.storage.local</code>
+        — a browser-native storage mechanism that exists entirely on your device.
+        It is not synced to Google or any cloud service.
+      </p>
+      <p>
+        You can delete all stored data at any time by clicking the trash icon 🗑 inside
+        the UniMemo popup, or by uninstalling the extension.
+      </p>
+    </div>
+
+    <!-- Permissions -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">🔑</div>
+        <h2>Permissions Explained</h2>
+      </div>
+      <p>UniMemo requests the following browser permissions — and only these:</p>
+      <ul class="permission-list">
+        <li>
+          <span class="perm-name">activeTab</span>
+          <span class="perm-desc">To read the URL of the tab you are currently viewing, so UniMemo can detect whether you are on Claude, ChatGPT, or Gemini before running a capture.</span>
+        </li>
+        <li>
+          <span class="perm-name">storage</span>
+          <span class="perm-desc">To save the compressed conversation context in your browser's local storage so it persists between popup opens. Data stays on your device only.</span>
+        </li>
+        <li>
+          <span class="perm-name">scripting</span>
+          <span class="perm-desc">As a fallback to inject the scraper into a tab that was open before the extension was installed. Used only when the automatic manifest injection did not run.</span>
+        </li>
+        <li>
+          <span class="perm-name">tabs</span>
+          <span class="perm-desc">To identify which AI platform you are using by reading the current tab's URL. No other tabs are accessed.</span>
+        </li>
+        <li>
+          <span class="perm-name">clipboardWrite</span>
+          <span class="perm-desc">To copy the formatted context to your clipboard when you click "Copy &amp; Switch AI". The clipboard is never written to without your direct action.</span>
+        </li>
+        <li>
+          <span class="perm-name">host: claude.ai chatgpt.com gemini.google.com</span>
+          <span class="perm-desc">To run content scripts that read the conversation messages displayed on these three pages when you click Capture. UniMemo accesses no other websites.</span>
+        </li>
+      </ul>
+    </div>
+
+    <!-- Third parties -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">🤝</div>
+        <h2>Third Parties</h2>
+      </div>
+      <p>
+        UniMemo does not share any data with third parties.
+        No analytics providers, advertising networks, or data brokers are used.
+        No data is sold, rented, or disclosed to any external party under any circumstances.
+      </p>
+      <p>
+        UniMemo makes no network requests of its own. The only external resource
+        loaded is the Inter typeface from Google Fonts (in the popup UI), which is
+        a standard font request containing no user data.
+      </p>
+    </div>
+
+    <!-- Children -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">👶</div>
+        <h2>Children's Privacy</h2>
+      </div>
+      <p>
+        UniMemo does not knowingly collect information from children under 13.
+        The extension does not collect personal information from anyone,
+        regardless of age.
+      </p>
+    </div>
+
+    <!-- Changes -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">📝</div>
+        <h2>Changes to This Policy</h2>
+      </div>
+      <p>
+        If this policy changes, the updated version will be posted at this URL
+        with a revised "Effective" date at the top. We do not expect material
+        changes — UniMemo's architecture is intentionally designed to require
+        no data collection.
+      </p>
+    </div>
+
+    <!-- Contact -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">✉️</div>
+        <h2>Contact</h2>
+      </div>
+      <p>
+        Questions about this privacy policy? Reach out at
+        <a href="mailto:utkarshaggarwal06@gmail.com"
+           style="color:var(--accent);text-decoration:none">
+          utkarshaggarwal06@gmail.com
+        </a>
+      </p>
+    </div>
+
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-inner">
+      <div class="footer-logo">🔗 UniMemo</div>
+      <div class="footer-sub">AI Context Bridge · Chrome Extension</div>
+      <div class="footer-contact">
+        Questions? <a href="mailto:utkarshaggarwal06@gmail.com">utkarshaggarwal06@gmail.com</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>
